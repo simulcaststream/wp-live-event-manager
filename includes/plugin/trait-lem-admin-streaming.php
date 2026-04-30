@@ -8,55 +8,27 @@
 trait LEM_Trait_Admin_And_Streaming {
     // Admin menu
     public function add_admin_menu() {
-        // 1. Live Streams — primary operational view
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Live Streams',
-            'Live Streams',
-            'manage_options',
-            'live-event-manager-stream-management',
-            array($this, 'render_stream_management_page')
-        );
 
-        // 2. Vendors — streaming & payment integrations (was "Stream Vendors")
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Vendors',
-            'Vendors',
-            'manage_options',
-            'live-event-manager-stream-vendors',
-            array($this, 'render_stream_vendors_page')
-        );
-
-        // 3. Access Tokens — JWT management (was "JWT Manager")
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Access Tokens',
-            'Access Tokens',
-            'manage_options',
-            'live-event-manager-jwt',
-            array($this, 'render_jwt_page')
-        );
+        // ── Visible: Live Event Manager · Tickets · Streams · Settings ──────────
 
         add_submenu_page(
             'edit.php?post_type=lem_event',
-            'Revoke access',
-            'Revoke access',
-            'manage_options',
-            'live-event-manager-revoke-access',
-            array($this, 'render_revoke_access_page')
-        );
-
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Payments',
-            'Payments',
+            'Tickets',
+            'Tickets',
             'manage_options',
             'live-event-manager-payments',
             array($this, 'render_payments_page')
         );
 
-        // 4. Settings — general plugin settings (was "Event Settings")
+        add_submenu_page(
+            'edit.php?post_type=lem_event',
+            'Streams',
+            'Streams',
+            'manage_options',
+            'live-event-manager-stream-management',
+            array($this, 'render_stream_management_page')
+        );
+
         add_submenu_page(
             'edit.php?post_type=lem_event',
             'Settings',
@@ -66,56 +38,27 @@ trait LEM_Trait_Admin_And_Streaming {
             array($this, 'render_settings_page')
         );
 
-        // 5. Devices — device-specific settings (was "Device Settings")
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Devices',
-            'Devices',
-            'manage_options',
-            'live-event-manager-device-settings',
-            array($this, 'render_device_settings_page')
+        // ── Hidden — registered for URL / bookmark compatibility ──────────────
+        // Accessible via links within Settings, Services, and other admin pages.
+
+        $hidden = array(
+            array('live-event-manager-jwt',             'Access',       'render_jwt_page'),
+            array('live-event-manager-revoke-access',   'Revoke',       'render_revoke_access_page'),
+            array('live-event-manager-templates',       'Templates',    'render_templates_page'),
+            array('live-event-manager-services',        'Services',     'render_services_page'),
+            array('live-event-manager-stripe',          'Stripe',       'render_stripe_redirect'),
+            array('live-event-manager-engine',          'Engine',       'render_engine_redirect'),
+            array('live-event-manager-user-guide',      'Help',         'render_user_guide_page'),
+            array('live-event-manager-debug',           'Debug',        'render_debug_page'),
+            array('live-event-manager-device-settings', 'Devices',      'render_devices_redirect'),
+            array('live-event-manager-stream-vendors',  'Vendors',      'render_stream_vendors_redirect'),
+            array('live-event-manager-stream-setup',    'Stream Setup', 'render_stream_setup_page'),
         );
 
-        // 6. User Guide
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'User Guide',
-            'User Guide',
-            'manage_options',
-            'live-event-manager-user-guide',
-            array($this, 'render_user_guide_page')
-        );
-
-        // 7. Templates — custom template pack management
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Templates',
-            'Templates',
-            'manage_options',
-            'live-event-manager-templates',
-            array($this, 'render_templates_page')
-        );
-
-        // 8. Debug — system diagnostics (was "System Debug")
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Debug',
-            'Debug',
-            'manage_options',
-            'live-event-manager-debug',
-            array($this, 'render_debug_page')
-        );
-
-        // Register old Stream Setup slug so existing bookmarks still work (hidden from menu).
-        add_submenu_page(
-            'edit.php?post_type=lem_event',
-            'Stream Setup',
-            'Stream Setup',
-            'manage_options',
-            'live-event-manager-stream-setup',
-            array($this, 'render_stream_setup_page')
-        );
-        remove_submenu_page('edit.php?post_type=lem_event', 'live-event-manager-stream-setup');
+        foreach ($hidden as list($slug, $title, $cb)) {
+            add_submenu_page('edit.php?post_type=lem_event', $title, $title, 'manage_options', $slug, array($this, $cb));
+            remove_submenu_page('edit.php?post_type=lem_event', $slug);
+        }
     }
     
     // Remove the automatic "Add New" submenu to avoid duplication
@@ -508,8 +451,49 @@ trait LEM_Trait_Admin_And_Streaming {
         include LEM_PLUGIN_DIR . 'templates/publisher-page.php';
     }
     
+    public function render_services_page() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Unauthorized', 'live-event-manager'));
+        }
+        include LEM_PLUGIN_DIR . 'templates/services-page.php';
+    }
+
     public function render_stream_vendors_page() {
         include LEM_PLUGIN_DIR . 'templates/stream-vendors-page.php';
+    }
+
+    public function render_stripe_redirect() {
+        wp_redirect(admin_url(add_query_arg(
+            array('post_type' => 'lem_event', 'page' => 'live-event-manager-services', 'service' => 'payments'),
+            'edit.php'
+        )));
+        exit;
+    }
+
+    public function render_engine_redirect() {
+        wp_redirect(admin_url(add_query_arg(
+            array('post_type' => 'lem_event', 'page' => 'live-event-manager-services', 'service' => 'streaming'),
+            'edit.php'
+        )));
+        exit;
+    }
+
+    public function render_stream_vendors_redirect() {
+        $url = admin_url(add_query_arg(
+            array('post_type' => 'lem_event', 'page' => 'live-event-manager-services', 'service' => 'streaming'),
+            'edit.php'
+        ));
+        wp_redirect($url);
+        exit;
+    }
+
+    public function render_devices_redirect() {
+        $url = admin_url(add_query_arg(
+            array('post_type' => 'lem_event', 'page' => 'live-event-manager-settings', 'tab' => 'device'),
+            'edit.php'
+        ));
+        wp_redirect($url);
+        exit;
     }
     
     // Stream setup AJAX handlers
@@ -522,14 +506,14 @@ trait LEM_Trait_Admin_And_Streaming {
         
         $stream_id = sanitize_text_field($_POST['stream_id'] ?? '');
         if (empty($stream_id)) {
-            $settings = get_option('lem_settings', array());
-            $stream_id = $settings['mux_live_stream_id'] ?? '';
+            $settings  = get_option('lem_settings', array());
+            $stream_id = $settings['lem_live_stream_id'] ?? $settings['mux_live_stream_id'] ?? '';
         }
-        
+
         if (empty($stream_id)) {
             wp_send_json_error('Stream ID is required');
         }
-        
+
         $request = new WP_REST_Request('GET', '/lem/v1/rtmp-info');
         $request->set_param('stream_id', $stream_id);
         $result = $this->get_rtmp_info($request);
@@ -553,10 +537,10 @@ trait LEM_Trait_Admin_And_Streaming {
         $stream_key = sanitize_text_field($_POST['stream_key'] ?? '');
         
         if (empty($stream_id)) {
-            $settings = get_option('lem_settings', array());
-            $stream_id = $settings['mux_live_stream_id'] ?? '';
+            $settings  = get_option('lem_settings', array());
+            $stream_id = $settings['lem_live_stream_id'] ?? $settings['mux_live_stream_id'] ?? '';
         }
-        
+
         if (empty($stream_id) || empty($url)) {
             wp_send_json_error('Stream ID and URL are required');
         }
@@ -588,10 +572,10 @@ trait LEM_Trait_Admin_And_Streaming {
         $target_id = sanitize_text_field($_POST['target_id'] ?? '');
         
         if (empty($stream_id)) {
-            $settings = get_option('lem_settings', array());
-            $stream_id = $settings['mux_live_stream_id'] ?? '';
+            $settings  = get_option('lem_settings', array());
+            $stream_id = $settings['lem_live_stream_id'] ?? $settings['mux_live_stream_id'] ?? '';
         }
-        
+
         if (empty($stream_id) || empty($target_id)) {
             wp_send_json_error('Stream ID and Target ID are required');
         }
@@ -999,187 +983,111 @@ trait LEM_Trait_Admin_And_Streaming {
             wp_send_json_error($error_message);
         }
         
-        // Clear cache
-        $redis = $this->get_redis_connection();
-        if ($redis) {
-            if ($provider === 'mux') {
-                $redis->del('mux:live_streams_list');
-            }
-        }
-        
-        // Add provider marker to result
+        // Clear the provider's stream list cache
+        LEM_Cache::del($provider . ':live_streams');
+
         if (is_array($result)) {
             $result['_provider'] = $provider;
         }
-        
+
         wp_send_json_success($result);
     }
-    
+
     public function ajax_delete_stream() {
         check_ajax_referer('lem_stream_management_nonce', 'nonce');
-        
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized');
         }
-        
+
         $stream_id = sanitize_text_field($_POST['stream_id'] ?? '');
         if (empty($stream_id)) {
             wp_send_json_error('Stream ID is required');
         }
-        
-        // Call delete function directly instead of going through REST API
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            wp_send_json_error('Mux API credentials not configured');
+
+        $settings    = get_option('lem_settings', array());
+        $provider_id = $settings['streaming_provider'] ?? 'mux';
+        $provider    = LEM_Streaming_Provider_Factory::get_instance()->get_provider($provider_id, $this);
+
+        if (!$provider || !$provider->is_configured()) {
+            wp_send_json_error('Streaming provider not configured.');
         }
-        
-        // Call Mux API directly
-        $url = "https://api.mux.com/video/v1/live-streams/{$stream_id}";
-        $response = wp_remote_request($url, array(
-            'method' => 'DELETE',
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            ),
-            'timeout' => 10
-        ));
-        
-        if (is_wp_error($response)) {
-            wp_send_json_error($response->get_error_message());
+
+        $result = $provider->delete_stream($stream_id);
+
+        if (is_wp_error($result)) {
+            wp_send_json_error($result->get_error_message());
         }
-        
-        $code = wp_remote_retrieve_response_code($response);
-        
-        // Clear cache
-        $redis = $this->get_redis_connection();
-        if ($redis) {
-            $redis->del('mux:live_streams_list');
-        }
-        
-        if ($code === 204 || $code === 200) {
-            wp_send_json_success(array('success' => true, 'message' => 'Stream deleted successfully'));
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (isset($data['error'])) {
-            wp_send_json_error($data['error']['message'] ?? 'Failed to delete live stream');
-        }
-        
-        wp_send_json_success(array('success' => true));
+
+        LEM_Cache::del($provider_id . ':live_streams');
+
+        wp_send_json_success(array('message' => 'Stream deleted.'));
     }
-    
+
     public function ajax_update_stream() {
         check_ajax_referer('lem_stream_management_nonce', 'nonce');
-        
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized');
         }
-        
+
         $stream_id = sanitize_text_field($_POST['stream_id'] ?? '');
-        $passthrough = sanitize_text_field($_POST['passthrough'] ?? '');
-        // Handle boolean values - can be 'true', 'false', '1', '0', or actual boolean
-        $reduced_latency = isset($_POST['reduced_latency']) && (
-            $_POST['reduced_latency'] === 'true' || 
-            $_POST['reduced_latency'] === '1' || 
-            $_POST['reduced_latency'] === true
-        );
-        
         if (empty($stream_id)) {
-            $this->debug_log('Update stream error: Missing stream_id', array('POST' => $_POST));
-            wp_send_json_error('Stream ID is required. Please close and reopen the edit dialog.');
+            wp_send_json_error('Stream ID is required.');
         }
-        
-        // Create REST request with proper URL structure
-        // Call update function directly instead of going through REST API
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            wp_send_json_error('Mux API credentials not configured');
+
+        $settings    = get_option('lem_settings', array());
+        $provider_id = $settings['streaming_provider'] ?? 'mux';
+        $provider    = LEM_Streaming_Provider_Factory::get_instance()->get_provider($provider_id, $this);
+
+        if (!$provider || !$provider->is_configured()) {
+            wp_send_json_error('Streaming provider not configured.');
         }
-        
-        // Convert to boolean
-        $reduced_latency_bool = ($reduced_latency === '1' || $reduced_latency === 'true' || $reduced_latency === true);
-        
-        $payload = array();
-        if ($passthrough !== '') {
-            $payload['passthrough'] = $passthrough;
+
+        // Forward all non-reserved POST fields to the provider as params.
+        $reserved = array('action', 'nonce', 'stream_id');
+        $params   = array();
+        foreach ($_POST as $key => $value) {
+            if (!in_array($key, $reserved, true)) {
+                $params[sanitize_key($key)] = sanitize_text_field($value);
+            }
         }
-        $payload['reduced_latency'] = $reduced_latency_bool;
-        
-        // Call Mux API directly
-        $url = "https://api.mux.com/video/v1/live-streams/{$stream_id}";
-        $response = wp_remote_request($url, array(
-            'method' => 'PUT',
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret']),
-                'Content-Type' => 'application/json'
-            ),
-            'body' => json_encode($payload),
-            'timeout' => 10
-        ));
-        
-        if (is_wp_error($response)) {
-            wp_send_json_error($response->get_error_message());
+
+        $result = $provider->update_stream($stream_id, $params);
+
+        if (is_wp_error($result)) {
+            wp_send_json_error($result->get_error_message());
         }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (isset($data['error'])) {
-            wp_send_json_error($data['error']['message'] ?? 'Failed to update live stream');
-        }
-        
-        // Clear cache
-        $redis = $this->get_redis_connection();
-        if ($redis) {
-            $redis->del('mux:live_streams_list');
-        }
-        
-        wp_send_json_success($data['data'] ?? $data);
+
+        LEM_Cache::del($provider_id . ':live_streams');
+
+        wp_send_json_success($result ?: array('message' => 'Stream updated.'));
     }
-    
+
     public function ajax_get_stream_details() {
         check_ajax_referer('lem_nonce', 'nonce');
-        
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized');
         }
-        
+
         $stream_id = sanitize_text_field($_GET['stream_id'] ?? '');
-        
         if (empty($stream_id)) {
             wp_send_json_error('Stream ID is required');
         }
-        
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            wp_send_json_error('Mux API credentials not configured');
+
+        $settings    = get_option('lem_settings', array());
+        $provider_id = $settings['streaming_provider'] ?? 'mux';
+        $provider    = LEM_Streaming_Provider_Factory::get_instance()->get_provider($provider_id, $this);
+
+        if (!$provider || !$provider->is_configured()) {
+            wp_send_json_error('Streaming provider not configured.');
         }
-        
-        // Call Mux API to get stream details
-        $url = "https://api.mux.com/video/v1/live-streams/{$stream_id}";
-        $response = wp_remote_get($url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            ),
-            'timeout' => 10
-        ));
-        
-        if (is_wp_error($response)) {
-            wp_send_json_error($response->get_error_message());
+
+        $result = $provider->get_stream_details($stream_id);
+
+        if (is_wp_error($result)) {
+            wp_send_json_error($result->get_error_message());
         }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (isset($data['error'])) {
-            wp_send_json_error($data['error']['message'] ?? 'Failed to fetch stream details');
-        }
-        
-        // Return the stream data - Mux API wraps it in 'data' key
-        $stream_data = $data['data'] ?? $data;
-        
-        wp_send_json_success($stream_data);
+
+        wp_send_json_success($result);
     }
     
     public function ajax_save_stream_id() {
@@ -1194,21 +1102,21 @@ trait LEM_Trait_Admin_And_Streaming {
             wp_send_json_error('Stream ID is required');
         }
         
-        $settings = get_option('lem_settings', array());
-        $saved_stream_ids = $settings['mux_saved_stream_ids'] ?? array();
-        
+        $settings         = get_option('lem_settings', array());
+        // 'lem_saved_stream_ids' supersedes the old Mux-prefixed key.
+        $saved_stream_ids = $settings['lem_saved_stream_ids'] ?? $settings['mux_saved_stream_ids'] ?? array();
+
         if (!is_array($saved_stream_ids)) {
             $saved_stream_ids = array();
         }
-        
-        // Add stream ID if not already saved
-        if (!in_array($stream_id, $saved_stream_ids)) {
-            $saved_stream_ids[] = $stream_id;
-            $settings['mux_saved_stream_ids'] = array_unique($saved_stream_ids);
+
+        if (!in_array($stream_id, $saved_stream_ids, true)) {
+            $saved_stream_ids[]              = $stream_id;
+            $settings['lem_saved_stream_ids'] = array_unique($saved_stream_ids);
             update_option('lem_settings', $settings);
-            wp_send_json_success(array('message' => 'Stream ID saved successfully'));
+            wp_send_json_success(array('message' => 'Stream ID saved.'));
         } else {
-            wp_send_json_success(array('message' => 'Stream ID already saved'));
+            wp_send_json_success(array('message' => 'Stream ID already saved.'));
         }
     }
     

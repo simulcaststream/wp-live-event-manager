@@ -88,9 +88,17 @@ trait LEM_Trait_Bootstrap_And_Events {
         // Clear all tokens
         add_action('wp_ajax_lem_clear_all_tokens', array($this, 'ajax_clear_all_tokens'));
         
-        // Stripe webhook
-        add_action('wp_ajax_lem_stripe_webhook', array($this, 'handle_stripe_webhook'));
-        add_action('wp_ajax_nopriv_lem_stripe_webhook', array($this, 'handle_stripe_webhook'));
+        // Canonical payment webhook — use this single URL in every payment provider's dashboard.
+        add_action('wp_ajax_lem_payment_webhook',        array($this, 'handle_payment_webhook'));
+        add_action('wp_ajax_nopriv_lem_payment_webhook', array($this, 'handle_payment_webhook'));
+
+        // Legacy alias so existing Stripe dashboard configs keep working.
+        add_action('wp_ajax_lem_stripe_webhook',        array($this, 'handle_payment_webhook'));
+        add_action('wp_ajax_nopriv_lem_stripe_webhook', array($this, 'handle_payment_webhook'));
+
+        // PayPal capture — handles the buyer return URL after PayPal approval.
+        add_action('wp_ajax_nopriv_lem_paypal_capture', array($this, 'handle_paypal_capture'));
+        add_action('wp_ajax_lem_paypal_capture',        array($this, 'handle_paypal_capture'));
         
         // Mux webhook
         add_action('wp_ajax_lem_mux_webhook', array($this, 'handle_mux_webhook'));
@@ -605,6 +613,16 @@ trait LEM_Trait_Bootstrap_And_Events {
                 </td>
             </tr>
 
+            <tr id="lem-amount-field" style="display:<?php echo $is_free === 'paid' ? 'table-row' : 'none'; ?>;">
+                <th><label for="lem_amount">Amount (PayPal)</label></th>
+                <td>
+                    <input type="text" id="lem_amount" name="lem_amount"
+                           value="<?php echo esc_attr( get_post_meta( $post->ID, '_lem_amount', true ) ); ?>"
+                           class="small-text" placeholder="19.99">
+                    <p class="description">Numeric amount used by PayPal (e.g. <code>19.99</code>). Currency is set in Services → PayPal settings.</p>
+                </td>
+            </tr>
+
             <tr id="lem-display-price-field" style="display:<?php echo $is_free === 'paid' ? 'table-row' : 'none'; ?>;">
                 <th><label for="lem_display_price">Display Price</label></th>
                 <td>
@@ -772,6 +790,7 @@ trait LEM_Trait_Bootstrap_And_Events {
             'lem_event_end'  => '_lem_event_end',
             'lem_is_free' => '_lem_is_free',
             'lem_price_id' => '_lem_price_id',
+            'lem_amount' => '_lem_amount',
             'lem_display_price' => '_lem_display_price',
             'lem_excerpt' => '_lem_excerpt'
         );

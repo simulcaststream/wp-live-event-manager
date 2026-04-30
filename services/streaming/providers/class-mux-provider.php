@@ -363,4 +363,82 @@ class LEM_Mux_Provider implements LEM_Streaming_Provider_Interface {
             ),
         );
     }
+
+    public function normalize_stream(array $raw): array {
+        return array(
+            'id'         => $raw['id'] ?? '',
+            'name'       => $raw['passthrough'] ?? $raw['id'] ?? '',
+            'status'     => $raw['status'] ?? 'unknown',
+            'stream_key' => $raw['stream_key'] ?? '',
+            'playback_id'=> $raw['playback_ids'][0]['id'] ?? '',
+            'created_at' => $raw['created_at'] ?? '',
+        );
+    }
+
+    public function get_create_stream_fields(): array {
+        return array(
+            array(
+                'key'         => 'passthrough',
+                'label'       => 'Stream Name',
+                'type'        => 'text',
+                'required'    => true,
+                'placeholder' => 'e.g. Main Event Stream',
+                'description' => 'A friendly label to identify this stream.',
+            ),
+            array(
+                'key'     => 'playback_policies',
+                'label'   => 'Live Playback Policy',
+                'type'    => 'select',
+                'options' => array(
+                    'signed'        => 'Signed (JWT)',
+                    'public'        => 'Public',
+                    'public,signed' => 'Public & Signed',
+                ),
+                'default'     => 'signed',
+                'description' => 'Controls who can play the live stream.',
+            ),
+            array(
+                'key'     => 'asset_playback_policies',
+                'label'   => 'Recorded Asset Policy',
+                'type'    => 'select',
+                'options' => array(
+                    'signed'        => 'Signed (JWT)',
+                    'public'        => 'Public',
+                    'public,signed' => 'Public & Signed',
+                ),
+                'default'     => 'signed',
+                'description' => 'Controls who can play recordings after the stream ends.',
+            ),
+            array(
+                'key'   => 'reduced_latency',
+                'label' => 'Reduced Latency',
+                'type'  => 'checkbox',
+            ),
+            array(
+                'key'   => 'test_mode',
+                'label' => 'Test Mode',
+                'type'  => 'checkbox',
+            ),
+        );
+    }
+
+    public function get_edit_stream_fields(): array {
+        return array(
+            array(
+                'key'      => 'passthrough',
+                'label'    => 'Name',
+                'type'     => 'text',
+                'required' => true,
+            ),
+            array(
+                'key'   => 'reduced_latency',
+                'label' => 'Reduced Latency',
+                'type'  => 'checkbox',
+            ),
+        );
+    }
+
+    public function supports_simulcast(): bool {
+        return true;
+    }
 }

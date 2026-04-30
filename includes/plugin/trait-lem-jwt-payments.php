@@ -8,47 +8,69 @@
 trait LEM_Trait_Jwt_And_Payments {
 
     /**
-     * Issue or dedupe playback credentials (Mux or OME). Does not create gating sessions.
+     * Issue or dedupe playback credentials. Provider-agnostic: delegates to whichever
+     * streaming provider is active without branching on vendor name.
+     *
+     * Providers that return a fully-normalised token (containing a 'vendor' key) are
+     * trusted directly. Providers that return a raw token shape (e.g. OME Signed Policy)
+     * are normalised here and their playback blob is stored before returning.
      *
      * @return array{jwt?:string, jti?:string, expires_at?:int, llhls_url?:string, policy?:string, signature?:string, vendor?:string}|false
      */
     public function generate_jwt($email, $event_id, $payment_id = null, $is_refresh = false) {
         if (class_exists('LEM_Access') && LEM_Access::is_email_revoked_for_event($email, $event_id)) {
-            return false;
+            return apply_filters('lem_jwt_access_denied', false, $email, $event_id);
         }
 
         $provider = $this->get_streaming_provider();
-        if ($provider && $provider->get_id() === 'ome' && $provider->is_configured()) {
-            if ($is_refresh) {
-                $this->invalidate_existing_tokens($email, $event_id);
-            }
-            $tok = $provider->generate_playback_token($email, $event_id, $payment_id, false);
-            if (is_wp_error($tok) || !is_array($tok)) {
-                return false;
-            }
-            $exp_ts = strtotime($tok['expires_at'] ?? '') ?: (time() + 3600);
-            $blob   = array(
-                'vendor'    => 'ome',
-                'jwt'       => $tok['jwt'] ?? '',
-                'llhls_url' => $tok['llhls_url'] ?? '',
-                'policy'    => $tok['policy'] ?? '',
-                'signature' => $tok['signature'] ?? '',
-                'jti'       => $tok['jti'] ?? 'ome',
-            );
-            $this->store_playback_blob($email, $event_id, $blob, $exp_ts);
-            return array(
-                'jwt'         => $tok['jwt'] ?? '',
-                'jti'         => $tok['jti'] ?? 'ome',
-                'expires_at'  => $exp_ts,
-                'llhls_url'   => $tok['llhls_url'] ?? '',
-                'policy'      => $tok['policy'] ?? '',
-                'signature'   => $tok['signature'] ?? '',
-                'vendor'      => 'ome',
-                'session_id'  => null,
-            );
+        if (!$provider || !$provider->is_configured()) {
+            return false;
         }
 
-        return $this->issue_mux_playback_token($email, $event_id, $payment_id, $is_refresh);
+        // Centralise revocation here so no individual provider needs to handle it.
+        if ($is_refresh) {
+            $this->invalidate_existing_tokens($email, $event_id);
+        }
+
+        // Always pass false for $is_refresh: tokens are already invalidated above, so
+        // the provider's dedup check (if any) will find nothing and issue fresh.
+        $tok = $provider->generate_playback_token($email, $event_id, $payment_id, false);
+
+        $tok = apply_filters('lem_playback_token_generated', $tok, $email, $event_id, $provider->get_id());
+
+        if (is_wp_error($tok) || !is_array($tok)) {
+            return false;
+        }
+
+        // Providers that return a fully-normalised token (e.g. Mux via issue_mux_playback_token)
+        // include a 'vendor' key and have already stored their blob — return as-is.
+        if (isset($tok['vendor'])) {
+            return $tok;
+        }
+
+        // Raw token (e.g. OME Signed Policy) — persist blob and return normalised shape.
+        $exp_ts = strtotime($tok['expires_at'] ?? '') ?: (time() + 3600);
+        $vid    = $provider->get_id();
+        $blob   = array(
+            'vendor'    => $vid,
+            'jwt'       => $tok['jwt'] ?? '',
+            'llhls_url' => $tok['llhls_url'] ?? '',
+            'policy'    => $tok['policy'] ?? '',
+            'signature' => $tok['signature'] ?? '',
+            'jti'       => $tok['jti'] ?? $vid,
+        );
+        $this->store_playback_blob($email, $event_id, $blob, $exp_ts);
+
+        return array(
+            'jwt'        => $tok['jwt'] ?? '',
+            'jti'        => $tok['jti'] ?? $vid,
+            'expires_at' => $exp_ts,
+            'llhls_url'  => $tok['llhls_url'] ?? '',
+            'policy'     => $tok['policy'] ?? '',
+            'signature'  => $tok['signature'] ?? '',
+            'vendor'     => $vid,
+            'session_id' => null,
+        );
     }
 
     /**
@@ -244,8 +266,10 @@ trait LEM_Trait_Jwt_And_Payments {
         $this->store_event_email($event_id, $email);
         
         $result = $this->generate_jwt($email, $event_id, $payment_id);
-        
+
         if ($result && is_array($result)) {
+            do_action('lem_access_granted', $email, $event_id, $payment_id ?: null, 'admin', $result);
+
             $session_id = $this->create_session($event_id, $email);
             $result['session_id'] = $session_id;
 
@@ -341,6 +365,8 @@ trait LEM_Trait_Jwt_And_Payments {
             wp_send_json_error('Failed to generate access. Please try again.');
         }
 
+        do_action('lem_access_granted', $email, $event_id, null, 'free', $result);
+
         $session_id = $this->create_session($event_id, $email);
 
         if (!empty($result['jti'])) {
@@ -386,100 +412,60 @@ trait LEM_Trait_Jwt_And_Payments {
     }
 
     /**
-     * Check Stripe session status immediately (before webhook)
-     * This provides instant confirmation instead of waiting for webhook
+     * Check payment session status immediately (before webhook arrives).
+     * Delegates to the active payment provider.
      */
     public function check_stripe_session_immediate($session_id) {
         if (empty($session_id)) {
             return false;
         }
-        
-        $settings = get_option('lem_settings', array());
-        $stripe_mode = $settings['stripe_mode'] ?? 'test';
-        
-        if ($stripe_mode === 'test') {
-            $secret_key = $settings['stripe_test_secret_key'] ?? '';
-        } else {
-            $secret_key = $settings['stripe_live_secret_key'] ?? '';
-        }
-        
-        if (empty($secret_key)) {
-            $this->debug_log('Stripe secret key not configured for immediate check');
+
+        $provider = LEM_Payment_Provider_Factory::get_instance()->get_active_provider();
+        if (!$provider || !$provider->is_configured()) {
+            $this->debug_log('Payment provider not configured for immediate check');
             return false;
         }
-        
-        if (!class_exists('\Stripe\Stripe')) {
-            $this->debug_log('Stripe library not available for immediate check');
+
+        $status = $provider->get_payment_status($session_id);
+        if (is_wp_error($status)) {
+            $this->debug_log('Payment status check failed: ' . $status->get_error_message());
             return false;
         }
-        
-        try {
-            \Stripe\Stripe::setApiKey($secret_key);
-            
-            // Retrieve the session from Stripe
-            $session = \Stripe\Checkout\Session::retrieve($session_id);
-            
-            // Check if payment is completed
-            if ($session->payment_status === 'paid' && $session->status === 'complete') {
-                $event_id = $session->metadata->event_id ?? null;
-                $email = $session->customer_details->email ?? null;
-                
-                if ($event_id && $email) {
-                    $this->debug_log('Stripe session confirmed immediately', array(
-                        'session_id' => $session_id,
-                        'event_id' => $event_id,
-                        'email' => $email,
-                        'payment_status' => $session->payment_status
-                    ));
-                    
-                    // Check for duplicate to prevent double processing
-                    global $wpdb;
-                    $table = $wpdb->prefix . 'lem_jwt_tokens';
-                    $existing_token = $wpdb->get_row($wpdb->prepare(
-                        "SELECT jti, jwt_token, created_at FROM $table WHERE payment_id = %s AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
-                        $session_id
-                    ));
-                    
-                    if ($existing_token) {
-                        $this->debug_log('Existing JWT found in immediate check, using existing token', array(
-                            'session_id' => $session_id,
-                            'existing_jti' => $existing_token->jti
-                        ));
-                        return array(
-                            'jwt' => $existing_token->jwt_token,
-                            'jti' => $existing_token->jti,
-                            'email' => $email,
-                            'event_id' => $event_id,
-                            'from_cache' => true
-                        );
-                    }
-                    
-                    // No JWT exists yet - wait for webhook to process
-                    // Don't generate JWT here to avoid duplicates
-                    // The webhook will generate it and send the email
-                    $this->debug_log('No JWT found yet, waiting for webhook to process', array(
-                        'session_id' => $session_id,
-                        'event_id' => $event_id,
-                        'email' => $email
-                    ));
-                    
-                    // Return false to indicate JWT not ready yet
-                    return false;
-                }
-            } else {
-                $this->debug_log('Stripe session not yet paid', array(
+
+        if (!empty($status['paid'])) {
+            $event_id = $status['event_id'] ?? null;
+            $email    = $status['email'] ?? null;
+
+            if ($event_id && $email) {
+                $this->debug_log('Payment confirmed immediately', array(
                     'session_id' => $session_id,
-                    'payment_status' => $session->payment_status ?? 'unknown',
-                    'status' => $session->status ?? 'unknown'
+                    'event_id'   => $event_id,
+                    'email'      => $this->redact_email($email),
                 ));
+
+                // Check for an existing JWT to avoid duplicate issuance.
+                global $wpdb;
+                $table          = $wpdb->prefix . 'lem_jwt_tokens';
+                $existing_token = $wpdb->get_row($wpdb->prepare(
+                    "SELECT jti, jwt_token, created_at FROM $table WHERE payment_id = %s AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+                    $session_id
+                ));
+
+                if ($existing_token) {
+                    return array(
+                        'jwt'        => $existing_token->jwt_token,
+                        'jti'        => $existing_token->jti,
+                        'email'      => $email,
+                        'event_id'   => $event_id,
+                        'from_cache' => true,
+                    );
+                }
+
+                // No JWT yet — webhook will generate it.
+                return false;
             }
-        } catch (\Exception $e) {
-            $this->debug_log('Error checking Stripe session immediately', array(
-                'session_id' => $session_id,
-                'error' => $e->getMessage()
-            ));
         }
-        
+
         return false;
     }
     
@@ -754,37 +740,15 @@ trait LEM_Trait_Jwt_And_Payments {
         check_ajax_referer('lem_nonce', 'nonce');
 
         if (!$this->check_rate_limit('stripe_session', 5)) {
-            wp_send_json_error(['message' => 'Too many requests. Please wait a moment.']);
+            wp_send_json_error(array('message' => 'Too many requests. Please wait a moment.'));
         }
 
-        $event_id = sanitize_text_field($_POST['event_id']);
-        $price_id = sanitize_text_field($_POST['price_id']);
+        $event_id = sanitize_text_field($_POST['event_id'] ?? '');
+        $price_id = sanitize_text_field($_POST['price_id'] ?? '');
         $email    = sanitize_email($_POST['email'] ?? '');
 
         if (empty($event_id) || empty($price_id)) {
             wp_send_json_error('Event ID and Price ID are required');
-        }
-        
-        // Check if Stripe library is available
-        if (!class_exists('\Stripe\Stripe')) {
-            wp_send_json_error('Stripe library not available. Please run: composer install');
-        }
-        
-        $settings = get_option('lem_settings', array());
-        $stripe_mode = $settings['stripe_mode'] ?? 'test';
-        
-        $this->debug_log('Stripe mode: ' . $stripe_mode);
-        
-        if ($stripe_mode === 'test') {
-            $secret_key = $settings['stripe_test_secret_key'] ?? '';
-        } else {
-            $secret_key = $settings['stripe_live_secret_key'] ?? '';
-        }
-        
-        $this->debug_log('Stripe key configured: ' . (!empty($secret_key) ? 'yes' : 'no'));
-        
-        if (empty($secret_key)) {
-            wp_send_json_error('Stripe secret key not configured. Please check your settings.');
         }
 
         if (!empty($email) && $this->magic_link_service->has_valid_ticket($email, $event_id)) {
@@ -792,46 +756,30 @@ trait LEM_Trait_Jwt_And_Payments {
                 'message' => __('You already have access to this event. Check your inbox for your link or use “Resend” on the event page.', 'live-event-manager'),
             ));
         }
-        
-        try {
-            \Stripe\Stripe::setApiKey($secret_key);
-            
-            $event = $this->get_event_by_id($event_id);
-            if (!$event) {
-                wp_send_json_error('Event not found');
-            }
-            
-            $session_args = [
-                'payment_method_types' => ['card'],
-                'line_items' => [[
-                    'price' => $price_id,
-                    'quantity' => 1,
-                ]],
-                'mode' => 'payment',
-                'success_url' => home_url('/confirmation?session_id={CHECKOUT_SESSION_ID}'),
-                'cancel_url' => get_permalink($event_id) ?: home_url('/'),
-                'metadata' => [
-                    'event_id'    => $event_id,
-                    'event_title' => $event->title,
-                    'email'       => $email,
-                ],
-            ];
 
-            // Pre-fill and lock the customer email on Stripe Checkout
-            if (!empty($email)) {
-                $session_args['customer_email'] = $email;
-            }
-
-            $session = \Stripe\Checkout\Session::create($session_args);
-            
-            wp_send_json_success(array(
-                'checkout_url' => $session->url,
-                'session_id' => $session->id
-            ));
-            
-        } catch (\Exception $e) {
-            wp_send_json_error('Stripe error: ' . $e->getMessage());
+        $event = $this->get_event_by_id($event_id);
+        if (!$event) {
+            wp_send_json_error('Event not found');
         }
+
+        $provider = LEM_Payment_Provider_Factory::get_instance()->get_active_provider();
+        if (!$provider || !$provider->is_configured()) {
+            wp_send_json_error('Payment provider not configured. Please check your settings.');
+        }
+
+        $result = $provider->create_checkout_session(array(
+            'price_id'    => $price_id,
+            'event_id'    => $event_id,
+            'event_title' => $event->title,
+            'email'       => $email,
+            'cancel_url'  => get_permalink($event_id) ?: home_url('/'),
+        ));
+
+        if (is_wp_error($result)) {
+            wp_send_json_error($provider->get_name() . ' error: ' . $result->get_error_message());
+        }
+
+        wp_send_json_success($result);
     }
     
 

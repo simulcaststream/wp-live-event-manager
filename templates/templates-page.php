@@ -31,6 +31,7 @@ if (is_dir($bundled_base)) {
 ?>
 <div class="wrap">
     <h1>Templates</h1>
+    <?php require __DIR__ . '/admin-subnav.php'; ?>
     <p style="color:#666;max-width:640px;">Install a template pack to customise the event watch page and paywall. Each pack overrides only the files it ships — anything not included falls back to the built-in default.</p>
 
     <?php if (empty($installed)): ?>

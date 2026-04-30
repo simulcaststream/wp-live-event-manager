@@ -15,7 +15,16 @@ $events = get_posts(array(
 ));
 ?>
 <div class="wrap">
-    <h1><?php esc_html_e('Revoke access', 'live-event-manager'); ?></h1>
+    <h1><?php esc_html_e('Access', 'live-event-manager'); ?></h1>
+    <?php require __DIR__ . '/admin-subnav.php'; ?>
+
+    <nav class="nav-tab-wrapper" style="margin-bottom:16px;">
+        <a href="<?php echo esc_url(admin_url('edit.php?post_type=lem_event&page=live-event-manager-jwt')); ?>"
+           class="nav-tab">Tokens</a>
+        <a href="<?php echo esc_url(admin_url('edit.php?post_type=lem_event&page=live-event-manager-revoke-access')); ?>"
+           class="nav-tab nav-tab-active">Revoke Access</a>
+    </nav>
+
     <p><?php esc_html_e('Blocks the viewer email for the selected event, revokes database tokens, and deletes Redis sessions and playback cache for that email and event.', 'live-event-manager'); ?></p>
 
     <?php if (!empty($notice) && $notice === 'success') : ?>

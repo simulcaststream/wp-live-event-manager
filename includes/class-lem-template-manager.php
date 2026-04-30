@@ -64,6 +64,12 @@ class LEM_Template_Manager {
     private static $pack_sources = array();
 
     /**
+     * Per-request cache for collect_registered_packs() — invalidated when a new source is registered.
+     * @var array<string, array>|null
+     */
+    private static ?array $registered_packs_cache = null;
+
+    /**
      * Register a callback that returns template pack definitions shipped by another plugin.
      *
      * Each item must include: slug, name, version, path (absolute directory containing template.json).
@@ -72,16 +78,22 @@ class LEM_Template_Manager {
      * @param callable():array $callback Returns a list of pack manifest arrays.
      */
     public static function register_pack_source(callable $callback): void {
-        self::$pack_sources[] = $callback;
+        self::$pack_sources[]       = $callback;
+        self::$registered_packs_cache = null; // invalidate per-request cache
     }
 
     /**
      * Returns packs registered via register_pack_source(), keyed by slug (later sources overwrite).
      * Callbacks are isolated: exceptions are caught so bad add-ons cannot break front-end resolution.
+     * Result is cached per-request; call register_pack_source() to bust the cache.
      *
      * @return array<string, array{path: string, meta: array}>
      */
     private static function collect_registered_packs(): array {
+        if (self::$registered_packs_cache !== null) {
+            return self::$registered_packs_cache;
+        }
+
         $by_slug = array();
         foreach (self::$pack_sources as $cb) {
             try {
@@ -108,7 +120,42 @@ class LEM_Template_Manager {
                 );
             }
         }
+
+        self::$registered_packs_cache = $by_slug;
         return $by_slug;
+    }
+
+    /**
+     * Returns all packs bundled with the plugin (under template-packs/), keyed by slug.
+     * Uses the same discovery logic as get_installed_templates() but scoped to in-plugin packs only.
+     *
+     * @return array<string, array>  Slug → manifest array (includes 'path' key).
+     */
+    public static function get_bundled_template_packs(): array {
+        $bundled = array();
+        $base    = LEM_PLUGIN_DIR . 'template-packs/';
+
+        if (!is_dir($base)) {
+            return $bundled;
+        }
+
+        foreach ((array) glob($base . '*', GLOB_ONLYDIR) as $dir) {
+            $json_path = trailingslashit($dir) . 'template.json';
+            if (!file_exists($json_path)) {
+                continue;
+            }
+            $raw  = file_get_contents($json_path);
+            $meta = json_decode($raw, true);
+            if (!is_array($meta) || empty($meta['slug']) || empty($meta['name'])) {
+                continue;
+            }
+            $slug          = sanitize_key($meta['slug']);
+            $meta['path']  = trailingslashit($dir);
+            $meta['built_in'] = true;
+            $bundled[$slug]   = $meta;
+        }
+
+        return $bundled;
     }
 
     /**
@@ -356,9 +403,14 @@ class LEM_Template_Manager {
             return new WP_Error('not_found', 'Template pack not found.');
         }
 
-        $settings                                = get_option('lem_settings', array());
-        $settings['active_event_template']       = $slug;
+        $settings                          = get_option('lem_settings', array());
+        $previous_slug                     = $settings['active_event_template'] ?? self::DEFAULT_SLUG;
+        $settings['active_event_template'] = $slug;
         update_option('lem_settings', $settings);
+
+        $meta = self::get_pack_meta($slug);
+        do_action('lem_template_pack_activated', $slug, $meta, $previous_slug);
+
         return true;
     }
 
@@ -398,11 +450,39 @@ class LEM_Template_Manager {
             self::activate_template(self::DEFAULT_SLUG);
         }
 
+        $meta   = self::get_pack_meta($slug);
         $result = self::recursive_rmdir($real_dir);
         if (!$result) {
             return new WP_Error('delete_failed', 'Could not remove template directory.');
         }
+
+        do_action('lem_template_pack_deleted', $slug, $meta);
+
         return true;
+    }
+
+    /**
+     * Return the parsed template.json for a slug, or an empty array if unavailable.
+     *
+     * @param  string $slug
+     * @return array
+     */
+    private static function get_pack_meta(string $slug): array {
+        $slug = sanitize_key($slug);
+
+        if ($slug === self::DEFAULT_SLUG) {
+            return array('slug' => self::DEFAULT_SLUG, 'name' => 'Default', 'version' => LEM_VERSION);
+        }
+
+        $json_path = self::get_template_dir($slug) . 'template.json';
+        if (!file_exists($json_path)) {
+            $bundled = self::get_bundled_template_packs();
+            return $bundled[$slug] ?? array();
+        }
+
+        $raw  = file_get_contents($json_path);
+        $meta = json_decode($raw, true);
+        return is_array($meta) ? $meta : array();
     }
 
     /**
@@ -481,6 +561,36 @@ class LEM_Template_Manager {
             return new WP_Error('slug_mismatch', 'The "slug" in template.json must match the ZIP\'s top-level folder name.');
         }
 
+        // Validate requires_lem version constraint (e.g. ">=1.2.0").
+        if (!empty($meta['requires_lem'])) {
+            $constraint = (string) $meta['requires_lem'];
+            $operator   = '>=';
+            $version    = $constraint;
+            if (preg_match('/^([><=!]+)\s*(.+)$/', $constraint, $m)) {
+                $operator = $m[1];
+                $version  = $m[2];
+            }
+            if (!version_compare(LEM_VERSION, $version, $operator)) {
+                $zip->close();
+                return new WP_Error(
+                    'requires_lem',
+                    sprintf(
+                        'This template pack requires Live Event Manager %s %s (current: %s).',
+                        $operator,
+                        $version,
+                        LEM_VERSION
+                    )
+                );
+            }
+        }
+
+        // Allow companion plugins (e.g. a licensing plugin) to inspect or reject the install.
+        $meta = apply_filters('lem_before_template_pack_install', $meta, $candidate_slug, $tmp_path);
+        if (is_wp_error($meta)) {
+            $zip->close();
+            return $meta;
+        }
+
         $allowed = self::build_zip_allowlist($folder_name, is_array($meta) ? $meta : array());
 
         $dest_dir = self::TEMPLATES_BASE_DIR . $candidate_slug . '/';
@@ -511,6 +621,8 @@ class LEM_Template_Manager {
         }
 
         $zip->close();
+
+        do_action('lem_template_pack_installed', $candidate_slug, $meta);
 
         return $meta;
     }

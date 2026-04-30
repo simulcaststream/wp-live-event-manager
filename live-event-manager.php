@@ -31,6 +31,10 @@ require_once LEM_PLUGIN_DIR . 'includes/class-lem-access.php';
 require_once LEM_PLUGIN_DIR . 'includes/class-lem-device-service.php';
 require_once LEM_PLUGIN_DIR . 'includes/class-lem-template-manager.php';
 require_once LEM_PLUGIN_DIR . 'services/magic-links/class-magic-link-service.php';
+require_once LEM_PLUGIN_DIR . 'services/payments/class-payment-provider-interface.php';
+require_once LEM_PLUGIN_DIR . 'services/payments/class-payment-provider-factory.php';
+require_once LEM_PLUGIN_DIR . 'services/chat/class-chat-provider-interface.php';
+require_once LEM_PLUGIN_DIR . 'services/chat/class-chat-provider-factory.php';
 
 // Main class body split into domain traits (see includes/plugin/trait-lem-*.php)
 require_once LEM_PLUGIN_DIR . 'includes/plugin/trait-lem-bootstrap-events.php';

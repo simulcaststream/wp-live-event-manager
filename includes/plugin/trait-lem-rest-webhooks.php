@@ -1085,141 +1085,144 @@ trait LEM_Trait_Rest_And_Webhooks {
     // Test endpoint for JWT verification (development only)
 
     
-    // Handle Stripe webhook
-    public function handle_stripe_webhook() {
-        $this->debug_log('Stripe webhook received');
-        
-        $settings = get_option('lem_settings', array());
-        $webhook_secret = $settings['stripe_mode'] === 'live' 
-            ? $settings['stripe_live_webhook_secret'] 
-            : $settings['stripe_test_webhook_secret'];
-        
-        if (empty($webhook_secret)) {
-            $this->debug_log('Webhook secret not configured');
-            status_header(400);
-            wp_die('Webhook secret not configured', 'Webhook Error', array('response' => 400));
+    // Single payment webhook entry-point — routes to whichever provider is active.
+    public function handle_payment_webhook() {
+        $this->debug_log('Payment webhook received');
+
+        $provider = LEM_Payment_Provider_Factory::get_instance()->get_active_provider();
+        if (!$provider) {
+            status_header(500);
+            wp_die('Payment provider not available', 'Webhook Error', array('response' => 500));
         }
 
-        $payload = @file_get_contents('php://input');
-        $sig_header = $_SERVER['HTTP_STRIPE_SIGNATURE'] ?? '';
-        if (empty($sig_header)) {
-            $this->debug_log('Missing Stripe-Signature header');
-            status_header(400);
-            wp_die('Missing signature', 'Webhook Error', array('response' => 400));
+        $parsed = $provider->verify_webhook();
+
+        if (is_wp_error($parsed)) {
+            $code = $parsed->get_error_code();
+            $http = in_array($code, array('invalid_payload', 'invalid_signature', 'missing_signature'), true) ? 400 : 500;
+            $this->debug_log('Webhook verification failed: ' . $parsed->get_error_message());
+            status_header($http);
+            wp_die($parsed->get_error_message(), 'Webhook Error', array('response' => $http));
         }
 
-        try {
-            // Check if Stripe library is available
-            if (!class_exists('\Stripe\Webhook')) {
-                $this->debug_log('Stripe library not available');
-                status_header(500);
-                wp_die('Stripe library not available', 'Webhook Error', array('response' => 500));
+        $this->debug_log('Webhook event type: ' . ($parsed['type'] ?? 'unknown'));
+
+        // Allow companion plugins to handle non-checkout events.
+        do_action('lem_webhook_event_received', $parsed, $provider->get_id());
+
+        if (($parsed['type'] ?? '') !== 'checkout.completed') {
+            status_header(200);
+            wp_die('OK', '', array('response' => 200));
+        }
+
+        $payment_id = $parsed['payment_id'] ?? null;
+        $event_id   = $parsed['event_id']   ?? null;
+        $email      = $parsed['email']       ?? null;
+
+        if (!$event_id || !$email) {
+            $this->debug_log('Webhook: missing event_id or email', array(
+                'payment_id' => $payment_id,
+                'event_id'   => $event_id,
+                'has_email'  => !empty($email),
+            ));
+            status_header(200);
+            wp_die('OK', '', array('response' => 200));
+        }
+
+        $this->debug_log('Processing payment for event: ' . $event_id . ', email: ' . $this->redact_email($email));
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'lem_jwt_tokens';
+
+        $existing_token = $wpdb->get_row($wpdb->prepare(
+            "SELECT jti, jwt_token, created_at FROM $table WHERE payment_id = %s AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+            $payment_id
+        ));
+
+        if ($existing_token) {
+            $this->debug_log('Webhook duplicate detected — skipping JWT re-issue.', array(
+                'payment_id'   => $payment_id,
+                'event_id'     => $event_id,
+                'existing_jti' => $existing_token->jti,
+            ));
+            $redis = $this->get_redis_connection();
+            if ($redis && !$redis->get("jti_session:{$existing_token->jti}")) {
+                $this->magic_link_service->send_magic_link_email($email, $existing_token->jwt_token, $event_id, null);
             }
+        } elseif ($this->magic_link_service->has_valid_ticket($email, $event_id)) {
+            $this->debug_log('Webhook: email already has valid access — skipping.', array(
+                'email'      => $this->redact_email($email),
+                'event_id'   => $event_id,
+                'payment_id' => $payment_id,
+            ));
+        } else {
+            $this->store_event_email($event_id, $email);
 
-            $event = \Stripe\Webhook::constructEvent($payload, $sig_header, $webhook_secret);
-        } catch(\UnexpectedValueException $e) {
-            $this->debug_log('Invalid payload: ' . $e->getMessage());
-            status_header(400);
-            wp_die('Invalid payload', 'Webhook Error', array('response' => 400));
-        } catch(\Stripe\Exception\SignatureVerificationException $e) {
-            $this->debug_log('Invalid signature: ' . $e->getMessage());
-            status_header(400);
-            wp_die('Invalid signature', 'Webhook Error', array('response' => 400));
-        }
-        
-        $this->debug_log('Webhook event: ' . $event->type);
-        
-        if ($event->type === 'checkout.session.completed') {
-            $session = $event->data->object;
-            $event_id = $session->metadata->event_id ?? null;
-            // Prefer the email we stored at checkout time; fall back to what Stripe collected
-            $email = $session->metadata->email ?? $session->customer_details->email ?? null;
+            $jwt_result = $this->generate_jwt($email, $event_id, $payment_id);
 
-            if ($event_id && $email) {
-                $this->debug_log('Processing payment for event: ' . $event_id . ', email: ' . $this->redact_email($email));
+            // Allow companion plugins to react after access is granted.
+            do_action('lem_webhook_payment_received', $email, $event_id, $payment_id, $jwt_result, $provider->get_id());
 
-                global $wpdb;
-                $table = $wpdb->prefix . 'lem_jwt_tokens';
-                
-                // Check for existing JWT with this payment_id (session_id)
-                $existing_token = $wpdb->get_row($wpdb->prepare(
-                    "SELECT jti, jwt_token, created_at FROM $table WHERE payment_id = %s AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
-                    $session->id
-                ));
-
-                if ($existing_token) {
-                    $this->debug_log('Stripe webhook duplicate detected. Skipping JWT regeneration.', array(
-                        'session_id' => $session->id,
-                        'event_id' => $event_id,
-                        'email' => $this->redact_email($email),
-                        'existing_jti' => $existing_token->jti
-                    ));
-                    
-                    // Still send the magic link email if it hasn't been sent yet
-                    // Check if magic link was already sent by checking if session exists
-                    $redis = $this->get_redis_connection();
-                    $session_id_from_jti = null;
-                    if ($redis) {
-                        $session_id_from_jti = $redis->get("jti_session:{$existing_token->jti}");
-                    }
-                    
-                    // If no session exists, send the magic link email
-                    if (!$session_id_from_jti) {
-                        $this->magic_link_service->send_magic_link_email($email, $existing_token->jwt_token, $event_id, null);
-                        $this->debug_log('Magic link email sent for existing JWT', array(
-                            'session_id' => $session->id,
-                            'jti' => $existing_token->jti
-                        ));
-                    }
-                } else {
-                    if ($this->magic_link_service->has_valid_ticket($email, $event_id)) {
-                        $this->debug_log('Stripe webhook: skipped issuing access — email already has valid access for this event', array(
-                            'email'      => $this->redact_email($email),
-                            'event_id'   => $event_id,
-                            'session_id' => $session->id,
-                        ));
-                    } else {
-                        // Store email as valid access before generating JWT
-                        $this->store_event_email($event_id, $email);
-
-                        // Generate playback token (paid events)
-                        $jwt_result = $this->generate_jwt($email, $event_id, $session->id);
-                        if ($jwt_result && isset($jwt_result['jwt'])) {
-                            $sid = $this->create_session($event_id, $email);
-                            $jti_for_session = $jwt_result['jti'] ?? '';
-                            if (!empty($jti_for_session)) {
-                                $r = $this->get_redis_connection();
-                                if ($r) {
-                                    $r->setex("jti_session:{$jti_for_session}", 24 * 60 * 60, $sid);
-                                }
-                            }
-                            $this->magic_link_service->send_magic_link_email($email, $jwt_result['jwt'], $event_id, $sid);
-                            $this->debug_log('JWT generated and email sent for payment', array(
-                                'session_id' => $session->id,
-                                'event_id'   => $event_id,
-                                'email'      => $this->redact_email($email),
-                                'jti'        => $jwt_result['jti'] ?? 'unknown',
-                            ));
-                        } else {
-                            $this->debug_log('Failed to generate JWT for payment', array(
-                                'session_id' => $session->id,
-                                'event_id'   => $event_id,
-                                'email'      => $this->redact_email($email),
-                            ));
-                        }
+            if ($jwt_result && isset($jwt_result['jwt'])) {
+                $sid             = $this->create_session($event_id, $email);
+                $jti_for_session = $jwt_result['jti'] ?? '';
+                if (!empty($jti_for_session)) {
+                    $r = $this->get_redis_connection();
+                    if ($r) {
+                        $r->setex("jti_session:{$jti_for_session}", 24 * 60 * 60, $sid);
                     }
                 }
+                $this->magic_link_service->send_magic_link_email($email, $jwt_result['jwt'], $event_id, $sid);
+                $this->debug_log('JWT issued and magic link sent.', array(
+                    'payment_id' => $payment_id,
+                    'event_id'   => $event_id,
+                    'jti'        => $jwt_result['jti'] ?? 'unknown',
+                ));
             } else {
-                $this->debug_log('Missing event_id or email in session metadata', array(
-                    'session_id' => $session->id,
-                    'event_id' => $event_id,
-                    'has_email' => !empty($email),
+                $this->debug_log('Failed to generate JWT for payment.', array(
+                    'payment_id' => $payment_id,
+                    'event_id'   => $event_id,
                 ));
             }
         }
 
         status_header(200);
-        wp_die('Webhook processed', '', array('response' => 200));
+        wp_die('OK', '', array('response' => 200));
+    }
+
+    /**
+     * Capture a PayPal order after buyer approval and redirect to the event page.
+     * PayPal redirects the buyer here with ?token=ORDER_ID&event_id=POST_ID.
+     * After a successful capture, PayPal fires PAYMENT.CAPTURE.COMPLETED → handle_paypal_webhook().
+     */
+    public function handle_paypal_capture() {
+        $order_id = sanitize_text_field($_GET['token']    ?? '');
+        $event_id = sanitize_text_field($_GET['event_id'] ?? '');
+
+        if (empty($order_id)) {
+            wp_die('Invalid PayPal return URL — missing order token.', 'Payment Error', array('response' => 400));
+        }
+
+        $provider = LEM_Payment_Provider_Factory::get_instance()->get_provider('paypal');
+        if (!$provider || !$provider->is_configured()) {
+            wp_die('PayPal is not configured.', 'Payment Error', array('response' => 500));
+        }
+
+        /** @var LEM_PayPal_Provider $provider */
+        $result = $provider->capture_order($order_id);
+
+        if (is_wp_error($result)) {
+            $this->debug_log('PayPal capture failed: ' . $result->get_error_message());
+            $event_url = $event_id ? get_permalink(intval($event_id)) : home_url('/');
+            wp_redirect(add_query_arg('lem_payment_error', '1', $event_url));
+            exit;
+        }
+
+        $this->debug_log('PayPal order captured.', array('order_id' => $order_id, 'event_id' => $event_id));
+
+        $event_url = $event_id ? get_permalink(intval($event_id)) : home_url('/');
+        wp_redirect(add_query_arg('lem_payment', 'processing', $event_url));
+        exit;
     }
 
     /**
@@ -1572,6 +1575,9 @@ trait LEM_Trait_Rest_And_Webhooks {
             $ttl = $state['can_watch'] ? 300 : 30; // 5 min for valid, 30 sec for errors
             $redis->setex($cache_key, $ttl, json_encode($state));
         }
+
+        // Allow companion plugins to augment or override the access state.
+        $state = (array) apply_filters('lem_event_access_state', $state, $event_id);
 
         // Store in memory cache
         $this->event_access_cache[$event_id] = $state;

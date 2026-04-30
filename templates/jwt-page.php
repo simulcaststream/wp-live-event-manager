@@ -1,7 +1,15 @@
 <?php if (!defined('ABSPATH')) exit; ?>
 <div class="wrap">
-    <h1>Access Tokens</h1>
-    
+    <h1>Access</h1>
+    <?php require __DIR__ . '/admin-subnav.php'; ?>
+
+    <nav class="nav-tab-wrapper" style="margin-bottom:16px;">
+        <a href="<?php echo esc_url(admin_url('edit.php?post_type=lem_event&page=live-event-manager-jwt')); ?>"
+           class="nav-tab nav-tab-active">Tokens</a>
+        <a href="<?php echo esc_url(admin_url('edit.php?post_type=lem_event&page=live-event-manager-revoke-access')); ?>"
+           class="nav-tab">Revoke Access</a>
+    </nav>
+
     <div class="lem-admin-container">
         <div class="lem-section">
             <h2>Active JWT Tokens</h2>

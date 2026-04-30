@@ -95,7 +95,7 @@ $html_content = convert_markdown_to_html($markdown_content);
 
 <div class="wrap">
     <h1 class="wp-heading-inline">Live Event Manager - User Guide</h1>
-    
+    <?php require __DIR__ . '/admin-subnav.php'; ?>
     <div class="lem-user-guide-container">
         <div class="lem-user-guide-sidebar">
             <div class="lem-user-guide-nav">

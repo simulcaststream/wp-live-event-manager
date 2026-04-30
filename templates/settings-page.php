@@ -20,13 +20,11 @@ if (isset($_POST['lem_settings_nonce']) && wp_verify_nonce($_POST['lem_settings_
     }
 
     if ($saved_tab === 'payments') {
-        $settings['stripe_mode']                 = sanitize_text_field($_POST['stripe_mode'] ?? 'test');
-        $settings['stripe_test_publishable_key'] = sanitize_text_field($_POST['stripe_test_publishable_key']  ?? '');
-        $settings['stripe_test_secret_key']      = sanitize_text_field($_POST['stripe_test_secret_key']       ?? '');
-        $settings['stripe_test_webhook_secret']  = sanitize_text_field($_POST['stripe_test_webhook_secret']   ?? '');
-        $settings['stripe_live_publishable_key'] = sanitize_text_field($_POST['stripe_live_publishable_key']  ?? '');
-        $settings['stripe_live_secret_key']      = sanitize_text_field($_POST['stripe_live_secret_key']       ?? '');
-        $settings['stripe_live_webhook_secret']  = sanitize_text_field($_POST['stripe_live_webhook_secret']   ?? '');
+        $available_pay = LEM_Payment_Provider_Factory::get_instance()->get_available_providers();
+        $submitted_pid = sanitize_text_field($_POST['payment_provider'] ?? '');
+        if (in_array($submitted_pid, $available_pay, true)) {
+            $settings['payment_provider'] = $submitted_pid;
+        }
     }
 
     if ($saved_tab === 'cache') {
@@ -73,6 +71,7 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
 
 <div class="wrap lem-settings-wrap">
     <h1>Live Event Manager – Settings</h1>
+    <?php require __DIR__ . '/admin-subnav.php'; ?>
 
     <?php
     // Show Upstash config warning if on a non-cache tab and not configured.
@@ -112,7 +111,7 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
             }
             $active_pid      = $settings['streaming_provider'] ?? 'mux';
             $active_provider = $factory->get_provider($active_pid);
-            $vendors_url     = admin_url('edit.php?post_type=lem_event&page=live-event-manager-stream-vendors');
+            $vendors_url     = admin_url('edit.php?post_type=lem_event&page=live-event-manager-services&service=streaming');
         ?>
 
         <h2>Streaming Provider</h2>
@@ -138,7 +137,7 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
                     <?php endif; ?>
                     <p class="description">
                         Credentials and API keys are configured on the
-                        <a href="<?php echo esc_url($vendors_url); ?>">Vendors</a> page.
+                        <a href="<?php echo esc_url($vendors_url); ?>">Services</a> page.
                     </p>
                 </td>
             </tr>
@@ -153,69 +152,51 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
         <?php endif; ?>
 
         <?php /* ═══ PAYMENTS ════════════════════════════════════════════════ */ ?>
-        <?php if ($active_tab === 'payments'): ?>
-        <h2>Stripe Payments</h2>
+        <?php if ($active_tab === 'payments'):
+            $pay_factory       = LEM_Payment_Provider_Factory::get_instance();
+            $pay_providers     = $pay_factory->get_available_providers();
+            $active_pay_pid    = $settings['payment_provider'] ?? ($pay_providers[0] ?? 'stripe');
+            $active_pay_prov   = $pay_factory->get_provider($active_pay_pid);
+            $services_pay_url  = admin_url('edit.php?post_type=lem_event&page=live-event-manager-services&service=payments');
+        ?>
+
+        <h2>Payment Provider</h2>
         <table class="form-table">
             <tr>
-                <th><label for="stripe_mode">Mode</label></th>
+                <th><label for="payment_provider">Active Provider</label></th>
                 <td>
-                    <select id="stripe_mode" name="stripe_mode">
-                        <option value="test" <?php selected($settings['stripe_mode'] ?? 'test', 'test'); ?>>Test</option>
-                        <option value="live" <?php selected($settings['stripe_mode'] ?? 'test', 'live'); ?>>Live</option>
+                    <select id="payment_provider" name="payment_provider">
+                        <?php foreach ($pay_providers as $pid):
+                            $prov = $pay_factory->get_provider($pid);
+                            $name = $prov ? $prov->get_name() : $pid;
+                        ?>
+                        <option value="<?php echo esc_attr($pid); ?>" <?php selected($active_pay_pid, $pid); ?>>
+                            <?php echo esc_html($name); ?>
+                        </option>
+                        <?php endforeach; ?>
                     </select>
+                    <?php if ($active_pay_prov): ?>
+                    <span style="margin-left:12px;">
+                        <?php if ($active_pay_prov->is_configured()): ?>
+                            <span style="color:#46b450;">&#10003; Configured</span>
+                        <?php else: ?>
+                            <span style="color:#d63638;">&#10007; Credentials missing</span>
+                        <?php endif; ?>
+                    </span>
+                    <?php endif; ?>
+                    <p class="description">
+                        Credentials and API keys are configured on the
+                        <a href="<?php echo esc_url($services_pay_url); ?>">Services</a> page.
+                    </p>
                 </td>
             </tr>
         </table>
 
-        <div class="lem-tab-nav" style="margin-top:16px;">
-            <button type="button" class="lem-tab-button <?php echo ($settings['stripe_mode'] ?? 'test') !== 'live' ? 'active' : ''; ?>" data-tab="stripe-test">Test Keys</button>
-            <button type="button" class="lem-tab-button <?php echo ($settings['stripe_mode'] ?? 'test') === 'live' ? 'active' : ''; ?>" data-tab="stripe-live">Live Keys</button>
-        </div>
-
-        <div id="stripe-test" class="lem-tab-content <?php echo ($settings['stripe_mode'] ?? 'test') !== 'live' ? 'active' : ''; ?>">
-            <table class="form-table">
-                <tr>
-                    <th><label for="stripe_test_publishable_key">Test Publishable Key</label></th>
-                    <td><input type="text" id="stripe_test_publishable_key" name="stripe_test_publishable_key"
-                               value="<?php echo esc_attr($settings['stripe_test_publishable_key'] ?? ''); ?>" class="regular-text"></td>
-                </tr>
-                <tr>
-                    <th><label for="stripe_test_secret_key">Test Secret Key</label></th>
-                    <td><input type="password" id="stripe_test_secret_key" name="stripe_test_secret_key"
-                               value="<?php echo esc_attr($settings['stripe_test_secret_key'] ?? ''); ?>" class="regular-text"></td>
-                </tr>
-                <tr>
-                    <th><label for="stripe_test_webhook_secret">Test Webhook Secret</label></th>
-                    <td><input type="password" id="stripe_test_webhook_secret" name="stripe_test_webhook_secret"
-                               value="<?php echo esc_attr($settings['stripe_test_webhook_secret'] ?? ''); ?>" class="regular-text"></td>
-                </tr>
-            </table>
-        </div>
-
-        <div id="stripe-live" class="lem-tab-content <?php echo ($settings['stripe_mode'] ?? 'test') === 'live' ? 'active' : ''; ?>">
-            <table class="form-table">
-                <tr>
-                    <th><label for="stripe_live_publishable_key">Live Publishable Key</label></th>
-                    <td><input type="text" id="stripe_live_publishable_key" name="stripe_live_publishable_key"
-                               value="<?php echo esc_attr($settings['stripe_live_publishable_key'] ?? ''); ?>" class="regular-text"></td>
-                </tr>
-                <tr>
-                    <th><label for="stripe_live_secret_key">Live Secret Key</label></th>
-                    <td><input type="password" id="stripe_live_secret_key" name="stripe_live_secret_key"
-                               value="<?php echo esc_attr($settings['stripe_live_secret_key'] ?? ''); ?>" class="regular-text"></td>
-                </tr>
-                <tr>
-                    <th><label for="stripe_live_webhook_secret">Live Webhook Secret</label></th>
-                    <td><input type="password" id="stripe_live_webhook_secret" name="stripe_live_webhook_secret"
-                               value="<?php echo esc_attr($settings['stripe_live_webhook_secret'] ?? ''); ?>" class="regular-text"></td>
-                </tr>
-            </table>
-        </div>
-
-        <h3>Stripe Webhook URL</h3>
-        <p>Add this URL in your <a href="https://dashboard.stripe.com/webhooks" target="_blank">Stripe Dashboard → Webhooks</a>:</p>
-        <code><?php echo esc_url($stripe_webhook_url); ?></code>
-        <p class="description">Listen for: <code>checkout.session.completed</code></p>
+        <p>
+            <a href="<?php echo esc_url(add_query_arg('pid', $active_pay_pid, $services_pay_url)); ?>" class="button">
+                Configure <?php echo esc_html($active_pay_prov ? $active_pay_prov->get_name() : $active_pay_pid); ?> credentials &rarr;
+            </a>
+        </p>
 
         <?php endif; ?>
 
@@ -354,6 +335,15 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
             <tr>
                 <th>Mux Webhook</th>
                 <td><code><?php echo esc_url($mux_webhook_url); ?></code></td>
+            </tr>
+            <tr>
+                <th>System Diagnostics</th>
+                <td>
+                    <a href="<?php echo esc_url(admin_url('edit.php?post_type=lem_event&page=live-event-manager-debug')); ?>" class="button button-secondary">
+                        Open Debug page &rarr;
+                    </a>
+                    <p class="description">Redis connection test, system info, and troubleshooting tools.</p>
+                </td>
             </tr>
         </table>
 

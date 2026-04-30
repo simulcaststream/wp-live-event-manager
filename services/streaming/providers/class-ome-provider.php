@@ -538,6 +538,35 @@ class LEM_OME_Provider implements LEM_Streaming_Provider_Interface {
     }
 
     public function get_extra_tabs() {
-        return array(); // No extra tabs needed for OME
+        return array();
+    }
+
+    public function normalize_stream( array $raw ): array {
+        // OME list_streams returns minimal objects; enrich where possible.
+        $id   = $raw['id'] ?? $raw['name'] ?? '';
+        $name = $raw['name'] ?? $id;
+        return array(
+            'id'         => $id,
+            'name'       => $name,
+            'status'     => $raw['status'] ?? 'idle',
+            'stream_key' => '',  // OME has no per-stream key; auth is app-level
+            'playback_id'=> $id, // Stream name doubles as the playback identifier
+            'created_at' => $raw['created_at'] ?? '',
+        );
+    }
+
+    public function get_create_stream_fields(): array {
+        // OME streams are created by the encoder pushing RTMP — nothing to configure here.
+        return array();
+    }
+
+    public function get_edit_stream_fields(): array {
+        // OME streams are managed server-side; no in-app editing.
+        return array();
+    }
+
+    public function supports_simulcast(): bool {
+        // OME does not expose a simulcast API; users should use OBS multi-output.
+        return false;
     }
 }
