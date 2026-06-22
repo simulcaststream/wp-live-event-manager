@@ -17,9 +17,20 @@
  * Filters:
  *   lem_resolve_template_file — (string $absolute_path, string $filename)
  *   lem_installed_template_packs — (array $templates)
+ *   lem_before_template_pack_install — (array $meta, string $slug, string $tmp_path) may return WP_Error
+ *   lem_template_pack_install_metadata — (array $meta, string $slug) after manifest parse, before extract
+ *   lem_template_pack_update_response — (null|array $response, string $slug, array $meta) reserved; not used by core yet
  *
  * Actions:
  *   lem_template_pack_source_error — (\Throwable $e, callable $callback) when a source callback throws
+ *   lem_template_pack_installed — (string $slug, array $meta)
+ *   lem_template_pack_activated — (string $slug, array $meta, string $previous_slug)
+ *   lem_template_pack_deleted — (string $slug, array $meta)
+ *
+ * Reserved manifest keys (passed through, ignored by core): marketplace, product_id,
+ * license_required, update_url, update_id.
+ *
+ * Canonical schema: docs/template-pack.schema.json
  *
  * Usage (from anywhere in the plugin):
  *   LEM_Template_Manager::resolve_template_file('single-event.php')
@@ -40,6 +51,9 @@ class LEM_Template_Manager {
 
     /** Maximum ZIP upload size: 5 MB */
     const MAX_ZIP_SIZE = 5242880;
+
+    /** Current template.json manifest format version. Bump when breaking manifest fields. */
+    const LEM_FORMAT_VERSION = 1;
 
     /**
      * Default template PHP/CSS/JS paths allowed in every pack ZIP (union with template.json "files").
@@ -64,6 +78,12 @@ class LEM_Template_Manager {
     private static $pack_sources = array();
 
     /**
+     * Per-request cache for collect_registered_packs() — invalidated when a new source is registered.
+     * @var array<string, array>|null
+     */
+    private static ?array $registered_packs_cache = null;
+
+    /**
      * Register a callback that returns template pack definitions shipped by another plugin.
      *
      * Each item must include: slug, name, version, path (absolute directory containing template.json).
@@ -72,16 +92,203 @@ class LEM_Template_Manager {
      * @param callable():array $callback Returns a list of pack manifest arrays.
      */
     public static function register_pack_source(callable $callback): void {
-        self::$pack_sources[] = $callback;
+        self::$pack_sources[]         = $callback;
+        self::$registered_packs_cache = null;
+    }
+
+    /**
+     * Clear the per-request registered-packs cache (for tests).
+     */
+    public static function clear_registered_packs_cache(): void {
+        self::$registered_packs_cache = null;
+    }
+
+    /**
+     * Path to the JSON Schema file for template.json (for authors and tooling).
+     */
+    public static function get_schema_path(): string {
+        return LEM_PLUGIN_DIR . 'docs/template-pack.schema.json';
+    }
+
+    /**
+     * Normalize and validate manifest fields from template.json.
+     *
+     * @param array<string, mixed> $meta Raw decoded JSON.
+     * @return array|WP_Error
+     */
+    public static function normalize_manifest(array $meta) {
+        foreach (array( 'name', 'slug', 'version' ) as $key) {
+            if (empty($meta[ $key ]) || ! is_string($meta[ $key ])) {
+                return new WP_Error('invalid_manifest', sprintf('template.json is missing or has invalid "%s".', $key));
+            }
+        }
+
+        $format = isset($meta['lem_format']) ? (int) $meta['lem_format'] : self::LEM_FORMAT_VERSION;
+        if ($format > self::LEM_FORMAT_VERSION) {
+            return new WP_Error(
+                'lem_format',
+                sprintf(
+                    'This template pack uses manifest format %d; this plugin supports up to %d.',
+                    $format,
+                    self::LEM_FORMAT_VERSION
+                )
+            );
+        }
+
+        $meta['lem_format'] = $format;
+        $meta['slug']       = sanitize_key($meta['slug']);
+
+        $string_fields = array( 'description', 'author', 'author_url', 'license', 'requires_lem', 'preview_url', 'screenshot', 'support_url', 'docs_url', 'update_url', 'update_id' );
+        foreach ($string_fields as $field) {
+            if (isset($meta[ $field ]) && ! is_string($meta[ $field ])) {
+                unset($meta[ $field ]);
+            }
+        }
+
+        if (! empty($meta['preview_url']) && ! self::is_https_url($meta['preview_url'])) {
+            unset($meta['preview_url']);
+        }
+        if (! empty($meta['screenshot']) && ! self::is_https_url($meta['screenshot'])) {
+            unset($meta['screenshot']);
+        }
+        foreach (array( 'support_url', 'docs_url', 'author_url', 'update_url' ) as $url_field) {
+            if (! empty($meta[ $url_field ]) && ! wp_http_validate_url($meta[ $url_field ])) {
+                unset($meta[ $url_field ]);
+            }
+        }
+
+        if (isset($meta['type']) && ! is_array($meta['type'])) {
+            unset($meta['type']);
+        }
+
+        if (isset($meta['files']) && ! is_array($meta['files'])) {
+            unset($meta['files']);
+        }
+
+        $requires_check = self::validate_requires_lem($meta['requires_lem'] ?? '');
+        if (is_wp_error($requires_check)) {
+            return $requires_check;
+        }
+
+        return $meta;
+    }
+
+    /**
+     * @param string $constraint e.g. ">=1.2.0" or "1.2.0"
+     * @return true|WP_Error
+     */
+    public static function validate_requires_lem(string $constraint) {
+        if ($constraint === '') {
+            return true;
+        }
+        $operator = '>=';
+        $version  = $constraint;
+        if (preg_match('/^([><=!]+)\s*(.+)$/', $constraint, $m)) {
+            $operator = $m[1];
+            $version  = trim($m[2]);
+        }
+        if (! version_compare(LEM_VERSION, $version, $operator)) {
+            return new WP_Error(
+                'requires_lem',
+                sprintf(
+                    /* translators: 1: operator, 2: required version, 3: current LEM version */
+                    __('This template pack requires Live Event Manager %1$s %2$s (current: %3$s).', 'live-event-manager'),
+                    $operator,
+                    $version,
+                    LEM_VERSION
+                )
+            );
+        }
+        return true;
+    }
+
+    /**
+     * Preview image URL for admin UI (preview_url preferred over legacy screenshot).
+     *
+     * @param array<string, mixed> $meta
+     */
+    public static function get_preview_url(array $meta): string {
+        if (! empty($meta['preview_url']) && self::is_https_url($meta['preview_url'])) {
+            return $meta['preview_url'];
+        }
+        if (! empty($meta['screenshot']) && self::is_https_url($meta['screenshot'])) {
+            return $meta['screenshot'];
+        }
+        return '';
+    }
+
+    /**
+     * Check for updates (reserved). Core does not call remote URLs; use filter for marketplace plugins.
+     *
+     * @return null|array{version?: string, package_url?: string, changelog?: string}
+     */
+    public static function check_pack_update(string $slug, array $meta): ?array {
+        $response = apply_filters('lem_template_pack_update_response', null, $slug, $meta);
+        return is_array($response) ? $response : null;
+    }
+
+    /**
+     * Show admin notice when the active pack is incompatible with the current LEM version.
+     */
+    public static function maybe_render_incompatibility_notice(): void {
+        if (! is_admin() || ! current_user_can('manage_options')) {
+            return;
+        }
+        $slug = self::get_active_slug();
+        if ($slug === self::DEFAULT_SLUG) {
+            return;
+        }
+        $meta = self::get_pack_meta($slug);
+        if (empty($meta['requires_lem'])) {
+            return;
+        }
+        $check = self::validate_requires_lem((string) $meta['requires_lem']);
+        if (! is_wp_error($check)) {
+            return;
+        }
+        printf(
+            '<div class="notice notice-warning"><p><strong>%s</strong> %s</p></div>',
+            esc_html__('Live Event Manager', 'live-event-manager'),
+            esc_html($check->get_error_message())
+        );
+    }
+
+    /**
+     * @param string $path Absolute filesystem path.
+     * @param string $filename Template basename.
+     */
+    private static function apply_filtered_template_path(string $path, string $filename): string {
+        $filtered = (string) apply_filters('lem_resolve_template_file', $path, $filename);
+        if (defined('WP_DEBUG') && WP_DEBUG && $filtered !== '' && ! is_readable($filtered)) {
+            _doing_it_wrong(
+                __FUNCTION__,
+                sprintf(
+                    'lem_resolve_template_file must return a readable path; "%s" was returned for %s.',
+                    $filtered,
+                    $filename
+                ),
+                '1.2.0'
+            );
+        }
+        return $filtered;
+    }
+
+    private static function is_https_url(string $url): bool {
+        return (bool) wp_http_validate_url($url) && stripos($url, 'https://') === 0;
     }
 
     /**
      * Returns packs registered via register_pack_source(), keyed by slug (later sources overwrite).
      * Callbacks are isolated: exceptions are caught so bad add-ons cannot break front-end resolution.
+     * Result is cached per-request; call register_pack_source() to bust the cache.
      *
      * @return array<string, array{path: string, meta: array}>
      */
     private static function collect_registered_packs(): array {
+        if (self::$registered_packs_cache !== null) {
+            return self::$registered_packs_cache;
+        }
+
         $by_slug = array();
         foreach (self::$pack_sources as $cb) {
             try {
@@ -108,7 +315,50 @@ class LEM_Template_Manager {
                 );
             }
         }
+
+        self::$registered_packs_cache = $by_slug;
         return $by_slug;
+    }
+
+    /**
+     * Returns all packs bundled with the plugin (under template-packs/), keyed by slug.
+     * Uses the same discovery logic as get_installed_templates() but scoped to in-plugin packs only.
+     *
+     * @return array<string, array>  Slug → manifest array (includes 'path' key).
+     */
+    public static function get_bundled_template_packs(): array {
+        $bundled = array();
+        $base    = LEM_PLUGIN_DIR . 'template-packs/';
+
+        if (!is_dir($base)) {
+            return $bundled;
+        }
+
+        foreach ((array) glob($base . '*', GLOB_ONLYDIR) as $dir) {
+            $json_path = trailingslashit($dir) . 'template.json';
+            if (!file_exists($json_path)) {
+                continue;
+            }
+            $raw  = file_get_contents($json_path);
+            $meta = json_decode($raw, true);
+            if (!is_array($meta) || empty($meta['slug']) || empty($meta['name'])) {
+                continue;
+            }
+            $normalized = self::normalize_manifest($meta);
+            if (is_wp_error($normalized)) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('[LEM] Invalid bundled template.json in ' . $dir . ': ' . $normalized->get_error_message());
+                }
+                continue;
+            }
+            $slug                    = $normalized['slug'];
+            $normalized['path']      = trailingslashit($dir);
+            $normalized['built_in']  = true;
+            $normalized['preview_url'] = self::get_preview_url($normalized);
+            $bundled[ $slug ]        = $normalized;
+        }
+
+        return $bundled;
     }
 
     /**
@@ -167,8 +417,11 @@ class LEM_Template_Manager {
     }
 
     /**
-     * Returns the filesystem path to a template pack directory (with trailing slash).
-     * 'default' resolves to the plugin's own /templates/ directory.
+     * Filesystem path for a pack install directory (with trailing slash).
+     *
+     * For slug "default", returns the plugin core templates/ directory.
+     * For other slugs, returns wp-content/lem-templates/{slug}/ only — not bundled
+     * template-packs/ or paths from register_pack_source().
      */
     public static function get_template_dir(string $slug): string {
         if ($slug === self::DEFAULT_SLUG) {
@@ -178,7 +431,9 @@ class LEM_Template_Manager {
     }
 
     /**
-     * Returns the public URL for a template pack directory (with trailing slash).
+     * Public URL for user-installed packs under wp-content/lem-templates/{slug}/.
+     *
+     * Default slug uses plugin templates/ URL. Does not cover registered or bundled roots.
      */
     public static function get_template_url(string $slug): string {
         if ($slug === self::DEFAULT_SLUG) {
@@ -208,25 +463,25 @@ class LEM_Template_Manager {
         if ($slug !== self::DEFAULT_SLUG) {
             $installed_path = self::get_template_dir($slug) . $filename;
             if (file_exists($installed_path)) {
-                return (string) apply_filters('lem_resolve_template_file', $installed_path, $filename);
+                return self::apply_filtered_template_path($installed_path, $filename);
             }
 
             $registered = self::collect_registered_packs();
             if (!empty($registered[ $slug ]['path'])) {
                 $reg_path = $registered[ $slug ]['path'] . $filename;
                 if (file_exists($reg_path)) {
-                    return (string) apply_filters('lem_resolve_template_file', $reg_path, $filename);
+                    return self::apply_filtered_template_path($reg_path, $filename);
                 }
             }
 
             $bundled_path = LEM_PLUGIN_DIR . 'template-packs/'
                 . sanitize_file_name($slug) . '/' . $filename;
             if (file_exists($bundled_path)) {
-                return (string) apply_filters('lem_resolve_template_file', $bundled_path, $filename);
+                return self::apply_filtered_template_path($bundled_path, $filename);
             }
         }
 
-        return (string) apply_filters('lem_resolve_template_file', $fallback, $filename);
+        return self::apply_filtered_template_path($fallback, $filename);
     }
 
     /**
@@ -317,10 +572,17 @@ class LEM_Template_Manager {
                 if (!is_array($meta) || empty($meta['slug']) || empty($meta['name'])) {
                     continue;
                 }
-                $meta['slug']     = sanitize_key($meta['slug']);
-                $meta['built_in'] = false;
-                $templates[]      = $meta;
-                $seen[ $meta['slug'] ] = true;
+                $normalized = self::normalize_manifest($meta);
+                if (is_wp_error($normalized)) {
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        error_log('[LEM] Invalid template.json in ' . $dir . ': ' . $normalized->get_error_message());
+                    }
+                    continue;
+                }
+                $normalized['built_in']    = false;
+                $normalized['preview_url'] = self::get_preview_url($normalized);
+                $templates[]               = $normalized;
+                $seen[ $normalized['slug'] ] = true;
             }
         }
 
@@ -356,9 +618,24 @@ class LEM_Template_Manager {
             return new WP_Error('not_found', 'Template pack not found.');
         }
 
-        $settings                                = get_option('lem_settings', array());
-        $settings['active_event_template']       = $slug;
+        if ($slug !== self::DEFAULT_SLUG) {
+            $meta = self::get_pack_meta($slug);
+            if (!empty($meta['requires_lem'])) {
+                $check = self::validate_requires_lem((string) $meta['requires_lem']);
+                if (is_wp_error($check)) {
+                    return $check;
+                }
+            }
+        }
+
+        $settings                          = get_option('lem_settings', array());
+        $previous_slug                     = $settings['active_event_template'] ?? self::DEFAULT_SLUG;
+        $settings['active_event_template'] = $slug;
         update_option('lem_settings', $settings);
+
+        $meta = self::get_pack_meta($slug);
+        do_action('lem_template_pack_activated', $slug, $meta, $previous_slug);
+
         return true;
     }
 
@@ -398,11 +675,43 @@ class LEM_Template_Manager {
             self::activate_template(self::DEFAULT_SLUG);
         }
 
+        $meta   = self::get_pack_meta($slug);
         $result = self::recursive_rmdir($real_dir);
         if (!$result) {
             return new WP_Error('delete_failed', 'Could not remove template directory.');
         }
+
+        do_action('lem_template_pack_deleted', $slug, $meta);
+
         return true;
+    }
+
+    /**
+     * Return the parsed template.json for a slug, or an empty array if unavailable.
+     *
+     * @param  string $slug
+     * @return array
+     */
+    private static function get_pack_meta(string $slug): array {
+        $slug = sanitize_key($slug);
+
+        if ($slug === self::DEFAULT_SLUG) {
+            return array('slug' => self::DEFAULT_SLUG, 'name' => 'Default', 'version' => LEM_VERSION);
+        }
+
+        $json_path = self::get_template_dir($slug) . 'template.json';
+        if (!file_exists($json_path)) {
+            $bundled = self::get_bundled_template_packs();
+            return $bundled[$slug] ?? array();
+        }
+
+        $raw  = file_get_contents($json_path);
+        $meta = json_decode($raw, true);
+        if (!is_array($meta)) {
+            return array();
+        }
+        $normalized = self::normalize_manifest($meta);
+        return is_wp_error($normalized) ? $meta : $normalized;
     }
 
     /**
@@ -469,16 +778,32 @@ class LEM_Template_Manager {
         }
 
         $meta = json_decode($json_content, true);
-        foreach (array( 'name', 'slug', 'version' ) as $required_key) {
-            if (empty($meta[ $required_key ])) {
-                $zip->close();
-                return new WP_Error('invalid_manifest', 'template.json is missing the required "' . $required_key . '" field.');
-            }
+        if (!is_array($meta)) {
+            $zip->close();
+            return new WP_Error('invalid_manifest', 'template.json is missing required fields (name, slug, version).');
         }
 
-        if (sanitize_key($meta['slug']) !== $candidate_slug) {
+        $meta = self::normalize_manifest($meta);
+        if (is_wp_error($meta)) {
+            $zip->close();
+            return $meta;
+        }
+
+        if ($meta['slug'] !== $candidate_slug) {
             $zip->close();
             return new WP_Error('slug_mismatch', 'The "slug" in template.json must match the ZIP\'s top-level folder name.');
+        }
+
+        $meta = apply_filters('lem_template_pack_install_metadata', $meta, $candidate_slug);
+        if (!is_array($meta)) {
+            $zip->close();
+            return new WP_Error('invalid_manifest', 'lem_template_pack_install_metadata must return an array.');
+        }
+
+        $meta = apply_filters('lem_before_template_pack_install', $meta, $candidate_slug, $tmp_path);
+        if (is_wp_error($meta)) {
+            $zip->close();
+            return $meta;
         }
 
         $allowed = self::build_zip_allowlist($folder_name, is_array($meta) ? $meta : array());
@@ -511,6 +836,8 @@ class LEM_Template_Manager {
         }
 
         $zip->close();
+
+        do_action('lem_template_pack_installed', $candidate_slug, $meta);
 
         return $meta;
     }

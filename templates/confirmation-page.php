@@ -24,13 +24,8 @@ if ($live_event_manager) {
     ));
 }
 
-if (!empty($session_id) && empty($jwt)) {
-    global $wpdb;
-    $table = $wpdb->prefix . 'lem_jwt_tokens';
-    $token = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM {$table} WHERE payment_id = %s AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
-        $session_id
-    ));
+if (!empty($session_id) && empty($jwt) && $live_event_manager) {
+    $token = $live_event_manager->get_jwt_row_by_payment_id($session_id);
 
     if ($token) {
         $email = $token->email;
@@ -45,14 +40,14 @@ if (!empty($session_id) && empty($jwt)) {
             ));
         }
     } else {
-        // No JWT found - check Stripe session status immediately
+        // No JWT yet — reconcile with payment provider API (webhook fallback).
         if ($live_event_manager) {
-            $stripe_result = $live_event_manager->check_stripe_session_immediate($session_id);
-            if ($stripe_result && isset($stripe_result['jwt'])) {
+            $stripe_result = $live_event_manager->reconcile_payment_session($session_id);
+            if ($stripe_result && ! is_wp_error($stripe_result) && is_array($stripe_result) && isset($stripe_result['jwt'])) {
                 $jwt = $stripe_result['jwt'];
                 $jti = $stripe_result['jti'] ?? '';
                 $email = $stripe_result['email'] ?? '';
-                if (empty($event_id) && isset($stripe_result['event_id'])) {
+                if (empty($event_id) && ! empty($stripe_result['event_id'])) {
                     $event_id = $stripe_result['event_id'];
                 }
                 if ($live_event_manager) {
@@ -198,7 +193,7 @@ $event_date_fmt = $event_date_raw ? date('F j, Y', strtotime($event_date_raw)) .
                 <?php endif; ?>
                 <p class="lem-confirm-sub">
                     <?php if ($pending_confirmation): ?>
-                        Stripe is finalising your payment. Your magic link will arrive by email the moment it clears.
+                        We are confirming your payment. This page will update automatically, and your magic link will be emailed once it clears.
                     <?php else: ?>
                         Your magic link is on its way. Use the button below to jump straight to the stream.
                     <?php endif; ?>
@@ -604,6 +599,45 @@ document.getElementById('lem-copy-code')?.addEventListener('click', function() {
         setTimeout(() => btn.innerHTML = orig, 2000);
     });
 });
+
+<?php if ($pending_confirmation && !empty($session_id)) : ?>
+<script>
+jQuery(function($) {
+    var attempts = 0;
+    var maxAttempts = 15;
+    var sessionId = <?php echo wp_json_encode($session_id); ?>;
+    var eventId = <?php echo wp_json_encode($event_id); ?>;
+    var ajaxConfig = (typeof lem_ajax !== 'undefined') ? lem_ajax : {
+        ajax_url: <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>,
+        nonce: <?php echo wp_json_encode(wp_create_nonce('lem_nonce')); ?>
+    };
+
+    function pollReconcile() {
+        if (attempts >= maxAttempts) {
+            return;
+        }
+        attempts++;
+        $.post(ajaxConfig.ajax_url, {
+            action: 'lem_reconcile_payment',
+            nonce: ajaxConfig.nonce,
+            session_id: sessionId,
+            event_id: eventId,
+            provider_id: 'stripe'
+        }).done(function(r) {
+            if (r && r.success && r.data && r.data.granted) {
+                window.location.reload();
+                return;
+            }
+            setTimeout(pollReconcile, 2000);
+        }).fail(function() {
+            setTimeout(pollReconcile, 3000);
+        });
+    }
+
+    setTimeout(pollReconcile, 1500);
+});
+</script>
+<?php endif; ?>
 
 jQuery(function($) {
     const $button = $('#lem-regenerate-button');

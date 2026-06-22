@@ -33,8 +33,10 @@ trait LEM_Trait_Bootstrap_And_Events {
         add_action('wp_ajax_lem_delete_simulcast_target', array($this, 'ajax_delete_simulcast_target'));
         add_action('wp_ajax_lem_save_stream_id', array($this, 'ajax_save_stream_id'));
         
-        // Provider upload
-        add_action('wp_ajax_lem_upload_provider', array($this, 'ajax_upload_provider'));
+        // Provider upload was removed in the three-package architecture.
+        // Providers live in adaptor plugins (Free Adaptors / Premium) and register
+        // through the factories. Keeping a write-into-plugin-dir upload endpoint
+        // is both brittle and a security risk.
 
         // Template pack management
         add_action('wp_ajax_lem_upload_template',   array($this, 'ajax_upload_template'));
@@ -88,14 +90,16 @@ trait LEM_Trait_Bootstrap_And_Events {
         // Clear all tokens
         add_action('wp_ajax_lem_clear_all_tokens', array($this, 'ajax_clear_all_tokens'));
         
-        // Stripe webhook
-        add_action('wp_ajax_lem_stripe_webhook', array($this, 'handle_stripe_webhook'));
-        add_action('wp_ajax_nopriv_lem_stripe_webhook', array($this, 'handle_stripe_webhook'));
-        
-        // Mux webhook
-        add_action('wp_ajax_lem_mux_webhook', array($this, 'handle_mux_webhook'));
-        add_action('wp_ajax_nopriv_lem_mux_webhook', array($this, 'handle_mux_webhook'));
-        
+        // Canonical payment webhook — use this single URL in every payment provider's dashboard.
+        // The handler auto-detects the provider from request headers and delegates to its
+        // verify_webhook() method. Vendor-specific webhook URLs (Mux, PayPal capture, etc.)
+        // are owned by adaptor plugins — core ships no vendor-specific AJAX actions.
+        add_action('wp_ajax_lem_payment_webhook',        array($this, 'handle_payment_webhook'));
+        add_action('wp_ajax_nopriv_lem_payment_webhook', array($this, 'handle_payment_webhook'));
+
+        add_action('wp_ajax_lem_reconcile_payment',        array($this, 'ajax_reconcile_payment'));
+        add_action('wp_ajax_nopriv_lem_reconcile_payment', array($this, 'ajax_reconcile_payment'));
+
         // Ably chat token endpoint
         add_action('wp_ajax_lem_ably_token', array($this, 'ajax_ably_token'));
         add_action('wp_ajax_nopriv_lem_ably_token', array($this, 'ajax_ably_token'));
@@ -112,6 +116,20 @@ trait LEM_Trait_Bootstrap_And_Events {
 
         // Show admin notice if Upstash is not configured
         add_action('admin_notices', array('LEM_Cache', 'maybe_show_config_notice'));
+
+        // Custom event editor: intercept native WP editor, save event, status endpoint
+        add_action('admin_init',            array($this, 'intercept_event_edit'));
+        add_action('wp_ajax_lem_save_event',        array($this, 'ajax_save_event'));
+        add_action('wp_ajax_lem_get_event_status',  array($this, 'ajax_get_event_status'));
+
+        // Webhook activity log
+        add_action('wp_ajax_lem_get_webhook_log',   array($this, 'ajax_get_webhook_log'));
+        add_action('wp_ajax_lem_clear_webhook_log', array($this, 'ajax_clear_webhook_log'));
+
+        // Events list: custom columns and edit-link override
+        add_filter('manage_lem_event_posts_columns',       array($this, 'event_list_columns'));
+        add_action('manage_lem_event_posts_custom_column', array($this, 'event_list_column_content'), 10, 2);
+        add_filter('post_row_actions',                     array($this, 'event_list_row_actions'), 10, 2);
     }
     
     public function init() {
@@ -165,12 +183,17 @@ trait LEM_Trait_Bootstrap_And_Events {
     }
     
     /**
-     * Load streaming provider using factory
+     * Load streaming provider using factory.
+     *
+     * The interface and factory are required at the plugin entry-point
+     * (live-event-manager.php) so this just resolves the currently-active
+     * provider. When no adaptor plugin has registered anything, this is null.
      */
     private function load_streaming_provider() {
-        require_once LEM_PLUGIN_DIR . 'services/streaming/class-streaming-provider-interface.php';
-        require_once LEM_PLUGIN_DIR . 'services/streaming/class-streaming-provider-factory.php';
-        
+        if (!class_exists('LEM_Streaming_Provider_Factory')) {
+            $this->streaming_provider = null;
+            return;
+        }
         $factory = LEM_Streaming_Provider_Factory::get_instance();
         $this->streaming_provider = $factory->get_active_provider($this);
     }
@@ -251,10 +274,44 @@ trait LEM_Trait_Bootstrap_And_Events {
     
     private function ensure_tables_exist() {
         if (get_option('lem_db_tables_v1') === '1') {
+            $this->ensure_webhook_log_table();
             return;
         }
         $this->create_tables();
+        $this->ensure_webhook_log_table();
         update_option('lem_db_tables_v1', '1');
+    }
+
+    /**
+     * Lazily create the webhook activity log table.
+     * Stores recent inbound payment webhook attempts so admins can verify
+     * Stripe / PayPal are actually reaching the endpoint.
+     */
+    private function ensure_webhook_log_table() {
+        if (get_option('lem_webhook_log_v1') === '1') {
+            return;
+        }
+        global $wpdb;
+        $charset_collate = $wpdb->get_charset_collate();
+        $table = $wpdb->prefix . 'lem_webhook_log';
+        $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            received_at DATETIME NOT NULL,
+            provider VARCHAR(32) DEFAULT NULL,
+            source_ip VARCHAR(64) DEFAULT NULL,
+            has_signature TINYINT(1) DEFAULT 0,
+            event_type VARCHAR(64) DEFAULT NULL,
+            payment_id VARCHAR(128) DEFAULT NULL,
+            event_id VARCHAR(64) DEFAULT NULL,
+            email VARCHAR(190) DEFAULT NULL,
+            status VARCHAR(32) NOT NULL,
+            message TEXT DEFAULT NULL,
+            payload_preview TEXT DEFAULT NULL,
+            PRIMARY KEY (id),
+            KEY idx_received_at (received_at)
+        ) {$charset_collate};";
+        $wpdb->query($sql);
+        update_option('lem_webhook_log_v1', '1');
     }
     
     public function activate() {
@@ -266,29 +323,17 @@ trait LEM_Trait_Bootstrap_And_Events {
         $this->add_rewrite_rules();
         flush_rewrite_rules();
         
-        // Set default options
+        // Set default options. Core ships only cross-cutting keys; every
+        // provider-specific key (Mux, Stripe, PayPal, OME, …) is seeded by its
+        // own adaptor plugin activation hook.
         if (!get_option('lem_settings')) {
             update_option('lem_settings', array(
-                // Streaming (Mux)
-                'mux_key_id'         => '',
-                'mux_private_key'    => '',
-                'mux_token_id'       => '',
-                'mux_token_secret'   => '',
-                'mux_webhook_secret' => '',
-                // Payments (Stripe)
-                'stripe_mode'                 => 'test',
-                'stripe_test_publishable_key' => '',
-                'stripe_test_secret_key'      => '',
-                'stripe_test_webhook_secret'  => '',
-                'stripe_live_publishable_key' => '',
-                'stripe_live_secret_key'      => '',
-                'stripe_live_webhook_secret'  => '',
                 // Cache (Upstash)
                 'upstash_redis_url'   => '',
                 'upstash_redis_token' => '',
                 // Access
-                'jwt_expiration_hours'           => 24,
-                'jwt_refresh_duration_minutes'   => 15,
+                'jwt_expiration_hours'         => 24,
+                'jwt_refresh_duration_minutes' => 15,
                 // Debug
                 'debug_mode' => 0,
             ));
@@ -605,6 +650,16 @@ trait LEM_Trait_Bootstrap_And_Events {
                 </td>
             </tr>
 
+            <tr id="lem-amount-field" style="display:<?php echo $is_free === 'paid' ? 'table-row' : 'none'; ?>;">
+                <th><label for="lem_amount">Amount (PayPal)</label></th>
+                <td>
+                    <input type="text" id="lem_amount" name="lem_amount"
+                           value="<?php echo esc_attr( get_post_meta( $post->ID, '_lem_amount', true ) ); ?>"
+                           class="small-text" placeholder="19.99">
+                    <p class="description">Numeric amount used by PayPal (e.g. <code>19.99</code>). Currency is set in Services → PayPal settings.</p>
+                </td>
+            </tr>
+
             <tr id="lem-display-price-field" style="display:<?php echo $is_free === 'paid' ? 'table-row' : 'none'; ?>;">
                 <th><label for="lem_display_price">Display Price</label></th>
                 <td>
@@ -772,8 +827,10 @@ trait LEM_Trait_Bootstrap_And_Events {
             'lem_event_end'  => '_lem_event_end',
             'lem_is_free' => '_lem_is_free',
             'lem_price_id' => '_lem_price_id',
+            'lem_amount' => '_lem_amount',
             'lem_display_price' => '_lem_display_price',
-            'lem_excerpt' => '_lem_excerpt'
+            'lem_excerpt' => '_lem_excerpt',
+            'lem_payment_provider' => '_lem_payment_provider',
         );
         
         foreach ($fields as $field_name => $meta_key) {
@@ -814,6 +871,223 @@ trait LEM_Trait_Bootstrap_And_Events {
         unset($this->event_access_cache[$post_id]);
     }
     
+    // ── Custom event editor ────────────────────────────────────────────────────
+
+    /**
+     * AJAX: create or update an lem_event from the custom editor.
+     * Action: lem_save_event (admin-only).
+     */
+    public function ajax_save_event() {
+        check_ajax_referer('lem_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized');
+        }
+
+        $event_id = isset($_POST['event_id']) ? intval($_POST['event_id']) : 0;
+        $title    = sanitize_text_field($_POST['title']    ?? '');
+        $slug     = sanitize_title($_POST['slug']          ?? '');
+        $status   = sanitize_text_field($_POST['status']   ?? 'publish');
+        if (!in_array($status, array('publish', 'draft'), true)) {
+            $status = 'publish';
+        }
+
+        $post_data = array(
+            'post_title'  => $title,
+            'post_status' => $status,
+            'post_type'   => 'lem_event',
+        );
+        if ($slug) {
+            $post_data['post_name'] = $slug;
+        }
+
+        if ($event_id > 0 && get_post_type($event_id) === 'lem_event') {
+            $post_data['ID'] = $event_id;
+            $result = wp_update_post($post_data, true);
+        } else {
+            $result = wp_insert_post($post_data, true);
+        }
+
+        if (is_wp_error($result)) {
+            wp_send_json_error($result->get_error_message());
+        }
+
+        $event_id = (int) $result;
+
+        // Save all event meta fields
+        $meta_fields = array(
+            'lem_playback_id'            => '_lem_playback_id',
+            'lem_live_stream_id'         => '_lem_live_stream_id',
+            'lem_stream_provider'        => '_lem_stream_provider',
+            'lem_playback_restriction_id'=> '_lem_playback_restriction_id',
+            'lem_event_date'             => '_lem_event_date',
+            'lem_event_end'              => '_lem_event_end',
+            'lem_is_free'                => '_lem_is_free',
+            'lem_price_id'               => '_lem_price_id',
+            'lem_amount'                 => '_lem_amount',
+            'lem_display_price'          => '_lem_display_price',
+            'lem_excerpt'                => '_lem_excerpt',
+            'lem_payment_provider'       => '_lem_payment_provider',
+        );
+
+        foreach ($meta_fields as $post_key => $meta_key) {
+            if (isset($_POST[$post_key])) {
+                update_post_meta($event_id, $meta_key, sanitize_text_field($_POST[$post_key]));
+            }
+        }
+
+        // Refresh Redis event blob
+        $event_data = array(
+            'event_id'                => $event_id,
+            'title'                   => get_the_title($event_id),
+            'playback_id'             => get_post_meta($event_id, '_lem_playback_id', true),
+            'live_stream_id'          => get_post_meta($event_id, '_lem_live_stream_id', true),
+            'playback_restriction_id' => get_post_meta($event_id, '_lem_playback_restriction_id', true),
+            'event_date'              => get_post_meta($event_id, '_lem_event_date', true),
+            'event_end'               => get_post_meta($event_id, '_lem_event_end', true),
+            'price_id'                => get_post_meta($event_id, '_lem_price_id', true),
+            'is_free'                 => get_post_meta($event_id, '_lem_is_free', true) ?: 'free',
+            'post_status'             => get_post_status($event_id),
+            'updated_at'              => current_time('mysql'),
+        );
+        $this->store_event_redis($event_id, $event_data);
+        unset(self::$memory_cache["event:{$event_id}"]);
+
+        wp_send_json_success(array(
+            'event_id'  => $event_id,
+            'permalink' => get_permalink($event_id),
+            'edit_url'  => admin_url(add_query_arg(
+                array('post_type' => 'lem_event', 'page' => 'lem-event-editor', 'event_id' => $event_id),
+                'edit.php'
+            )),
+        ));
+    }
+
+    /**
+     * AJAX: lightweight status for the event editor status bar.
+     * Returns tickets_sold, stream_status. Admin-only.
+     */
+    public function ajax_get_event_status() {
+        check_ajax_referer('lem_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized');
+        }
+
+        $event_id = intval($_POST['event_id'] ?? 0);
+        if (!$event_id) {
+            wp_send_json_error('event_id required');
+        }
+
+        global $wpdb;
+        $table        = $wpdb->prefix . 'lem_jwt_tokens';
+        $tickets_sold = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$table} WHERE event_id = %s AND payment_id IS NOT NULL AND payment_id != '' AND revoked_at IS NULL",
+            (string) $event_id
+        ));
+
+        $stream_id = get_post_meta($event_id, '_lem_live_stream_id', true);
+        $stream_status = 'idle';
+        if ($stream_id) {
+            $provider = $this->get_streaming_provider();
+            if ($provider) {
+                try {
+                    $details = $provider->get_stream_details($stream_id);
+                    $stream_status = $details['status'] ?? 'idle';
+                } catch (\Exception $e) {
+                    $stream_status = 'unknown';
+                }
+            }
+        }
+
+        wp_send_json_success(array(
+            'tickets_sold'  => $tickets_sold,
+            'stream_status' => $stream_status,
+        ));
+    }
+
+    // ── Webhook activity log AJAX ─────────────────────────────────────────────
+
+    public function ajax_get_webhook_log() {
+        check_ajax_referer('lem_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized');
+        }
+        global $wpdb;
+        $table = $wpdb->prefix . 'lem_webhook_log';
+        $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+        if (!$exists) {
+            wp_send_json_success(array('rows' => array()));
+        }
+        $rows = $wpdb->get_results(
+            "SELECT id, received_at, provider, source_ip, has_signature, event_type, payment_id, event_id, email, status, message
+             FROM {$table}
+             ORDER BY received_at DESC, id DESC
+             LIMIT 100"
+        );
+        wp_send_json_success(array('rows' => $rows ?: array()));
+    }
+
+    public function ajax_clear_webhook_log() {
+        check_ajax_referer('lem_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized');
+        }
+        global $wpdb;
+        $wpdb->query("TRUNCATE TABLE {$wpdb->prefix}lem_webhook_log");
+        wp_send_json_success();
+    }
+
+    // ── Events list columns & row actions ─────────────────────────────────────
+
+    public function event_list_columns($columns) {
+        $new = array();
+        foreach ($columns as $key => $label) {
+            $new[$key] = $label;
+            if ($key === 'title') {
+                $new['lem_status']  = 'Status';
+                $new['lem_tickets'] = 'Tickets';
+                $new['lem_date_doors'] = 'Doors Open';
+            }
+        }
+        unset($new['date']); // replaced by doors-open column
+        return $new;
+    }
+
+    public function event_list_column_content($column, $post_id) {
+        if ($column === 'lem_status') {
+            $status = get_post_status($post_id);
+            if ($status === 'publish') {
+                echo '<span style="color:#27ae60">&#9679; ' . esc_html__('Live', 'live-event-manager') . '</span>';
+            } else {
+                echo '<span style="color:#999">&#9679; ' . esc_html(ucfirst($status ?: 'Draft')) . '</span>';
+            }
+        }
+        if ($column === 'lem_tickets') {
+            global $wpdb;
+            $count = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->prefix}lem_jwt_tokens WHERE event_id = %s AND payment_id IS NOT NULL AND payment_id != '' AND revoked_at IS NULL",
+                (string) $post_id
+            ));
+            echo esc_html($count);
+        }
+        if ($column === 'lem_date_doors') {
+            $date = get_post_meta($post_id, '_lem_event_date', true);
+            echo $date ? esc_html(date_i18n('M j, Y H:i', strtotime($date))) : '—';
+        }
+    }
+
+    public function event_list_row_actions($actions, $post) {
+        if ($post->post_type !== 'lem_event') {
+            return $actions;
+        }
+        $edit_url = admin_url(add_query_arg(
+            array('post_type' => 'lem_event', 'page' => 'lem-event-editor', 'event_id' => $post->ID),
+            'edit.php'
+        ));
+        $actions['edit'] = '<a href="' . esc_url($edit_url) . '">' . __('Edit') . '</a>';
+        unset($actions['inline hide-if-no-js']); // remove quick-edit
+        return $actions;
+    }
+
     // Render homepage meta box
     public function render_homepage_meta_box($post) {
         wp_nonce_field('lem_save_homepage_meta', 'lem_homepage_meta_nonce');
@@ -1208,7 +1482,7 @@ trait LEM_Trait_Bootstrap_And_Events {
                 'active'     => true,
             );
 
-            $email_hash   = hash('sha256', $email);
+            $email_hash   = hash('sha256', strtolower(trim($email)));
             $session_json = wp_json_encode($session_data);
             $ttl          = 24 * 60 * 60;
             $active_key   = "active_sessions:{$event_id}:{$email_hash}";
@@ -1494,7 +1768,7 @@ trait LEM_Trait_Bootstrap_And_Events {
         return $revoked;
     }
     
-    private function generate_session_id() {
+    public function generate_session_id() {
         return bin2hex(random_bytes(32));
     }
     
@@ -1638,6 +1912,11 @@ trait LEM_Trait_Bootstrap_And_Events {
                 } else {
                     $error_message = $result['error'] ?? __('Unable to send a new link right now. Please try again shortly.', 'live-event-manager');
                 }
+            }
+
+            // Non-JS fallback: land on the resend tab with feedback.
+            if (! empty($success_message) || ! empty($error_message)) {
+                $_GET['lem_resend'] = '1';
             }
         }
 

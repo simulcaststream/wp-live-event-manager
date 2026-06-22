@@ -111,6 +111,50 @@ interface LEM_Streaming_Provider_Interface {
     public function handle_webhook($payload, $signature = null);
     
     /**
+     * Normalize a raw provider stream object to a canonical shape.
+     *
+     * Every implementation must return an array with at least these keys:
+     *   id          – provider stream ID
+     *   name        – human-readable display name
+     *   status      – 'active' | 'idle' | 'error' | 'unknown'
+     *   stream_key  – RTMP stream key (empty string if not applicable)
+     *   playback_id – primary playback identifier (empty string if none)
+     *   created_at  – ISO-8601 / strtotime()-parseable string, or empty
+     *
+     * @param  array $raw  Raw stream object as returned by the provider API.
+     * @return array       Normalized stream.
+     */
+    public function normalize_stream(array $raw): array;
+
+    /**
+     * Return field definitions for the "Create Stream" admin form.
+     *
+     * Each entry: [ 'key', 'label', 'type', 'placeholder'?, 'required'?,
+     *               'options'? (for select), 'default'? ]
+     * Return an empty array if the provider creates streams automatically
+     * (e.g. OME where the encoder pushes RTMP directly).
+     *
+     * @return array
+     */
+    public function get_create_stream_fields(): array;
+
+    /**
+     * Return field definitions for the "Edit Stream" admin form.
+     * Return an empty array if streams cannot be edited via the provider API.
+     *
+     * @return array
+     */
+    public function get_edit_stream_fields(): array;
+
+    /**
+     * Whether this provider supports adding simulcast targets (forwarding the
+     * live stream to secondary RTMP destinations such as YouTube or Twitch).
+     *
+     * @return bool
+     */
+    public function supports_simulcast(): bool;
+
+    /**
      * Get settings fields for admin
      */
     public function get_settings_fields();

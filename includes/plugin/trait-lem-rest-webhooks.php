@@ -6,10 +6,59 @@
  */
 
 trait LEM_Trait_Rest_And_Webhooks {
+
+    /**
+     * Decode a URL-safe base64 JWT segment, restoring padding stripped by the spec.
+     * base64url uses '-' and '_' instead of '+' and '/', and omits '=' padding.
+     *
+     * @param string $segment The raw base64url-encoded segment (header, payload, or signature).
+     * @return string|false Decoded bytes, or false on failure.
+     */
+    private function jwt_base64_decode(string $segment) {
+        // Translate URL-safe characters back to standard base64 alphabet.
+        $b64 = strtr($segment, '-_', '+/');
+        // Re-add padding so strlen is a multiple of 4.
+        $pad = (4 - (strlen($b64) % 4)) % 4;
+        return base64_decode($b64 . str_repeat('=', $pad), true);
+    }
+    /**
+     * Resolve a streaming provider for an admin REST request.
+     *
+     * By default, core delegates to the globally active streaming provider.
+     * For admin tooling (Streams page), we allow overriding via `provider` request
+     * param so admins can manage streams across vendors without changing the
+     * global active provider.
+     *
+     * @param WP_REST_Request $request
+     * @return object|WP_Error Provider instance or error.
+     */
+    private function streaming_provider_from_request_or_active($request) {
+        $requested = sanitize_key($request->get_param('provider') ?? '');
+        if ($requested === '') {
+            return $this->active_streaming_provider_or_error();
+        }
+
+        // Only admins can override provider selection.
+        if (!current_user_can('manage_options')) {
+            return $this->active_streaming_provider_or_error();
+        }
+
+        $factory  = LEM_Streaming_Provider_Factory::get_instance();
+        $provider = $factory->get_provider($requested, $this);
+        if (!$provider) {
+            return new WP_Error('unknown_provider', 'Streaming provider not registered', array('status' => 404));
+        }
+        if (!$provider->is_configured()) {
+            return new WP_Error('provider_not_configured', 'Streaming provider not configured', array('status' => 400));
+        }
+        return $provider;
+    }
     
     // Register REST routes
     public function register_rest_routes() {
-        register_rest_route('lem/v1', '/check-jwt-status', array(
+        $ns = apply_filters('lem_rest_namespace', LEM_REST_NAMESPACE);
+
+        register_rest_route($ns, '/check-jwt-status', array(
             'methods' => 'POST',
             'callback' => array($this, 'check_jwt_status'),
             'permission_callback' => function($request) {
@@ -20,71 +69,78 @@ trait LEM_Trait_Rest_And_Webhooks {
                 return !empty($nonce) && wp_verify_nonce($nonce, 'wp_rest');
             }
         ));
-        
-        register_rest_route('lem/v1', '/jwt-settings', array(
+
+        register_rest_route($ns, '/jwt-settings', array(
             'methods' => 'GET',
             'callback' => array($this, 'get_jwt_settings'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/live-streams', array(
+
+        register_rest_route($ns, '/live-streams', array(
             'methods' => 'GET',
             'callback' => array($this, 'list_live_streams'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/live-streams', array(
+
+        register_rest_route($ns, '/live-streams', array(
             'methods' => 'POST',
             'callback' => array($this, 'create_live_stream'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/live-streams/(?P<id>[a-zA-Z0-9_-]+)', array(
+
+        register_rest_route($ns, '/live-streams/(?P<id>[a-zA-Z0-9_-]+)', array(
             'methods' => 'DELETE',
             'callback' => array($this, 'delete_live_stream'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/live-streams/(?P<id>[a-zA-Z0-9_-]+)', array(
+
+        register_rest_route($ns, '/live-streams/(?P<id>[a-zA-Z0-9_-]+)', array(
             'methods' => 'PUT',
             'callback' => array($this, 'update_live_stream'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/stream-status', array(
+
+        register_rest_route($ns, '/stream-status', array(
             'methods' => 'GET',
             'callback' => array($this, 'get_stream_status'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/rtmp-info', array(
+
+        register_rest_route($ns, '/rtmp-info', array(
             'methods' => 'GET',
             'callback' => array($this, 'get_rtmp_info'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/simulcast-targets', array(
+
+        register_rest_route($ns, '/simulcast-targets', array(
             'methods' => 'GET',
             'callback' => array($this, 'get_simulcast_targets'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/simulcast-targets', array(
+
+        register_rest_route($ns, '/simulcast-targets', array(
             'methods' => 'POST',
             'callback' => array($this, 'create_simulcast_target'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
-        
-        register_rest_route('lem/v1', '/simulcast-targets/(?P<id>[a-zA-Z0-9_-]+)', array(
+
+        register_rest_route($ns, '/simulcast-targets/(?P<id>[a-zA-Z0-9_-]+)', array(
             'methods' => 'DELETE',
             'callback' => array($this, 'delete_simulcast_target'),
             'permission_callback' => array($this, 'check_admin_permission')
         ));
 
+        register_rest_route($ns, '/webhooks/streaming/(?P<provider>[a-z0-9_-]+)', array(
+            'methods'  => 'POST',
+            'callback' => array($this, 'handle_streaming_webhook'),
+            'permission_callback' => '__return_true',
+        ));
+
+        do_action('lem_rest_register_routes', $ns);
     }
     
-    // Check admin permission for REST API
-    private function check_admin_permission() {
+    // Check admin permission for REST API (must be public — WordPress calls this from outside the class).
+    public function check_admin_permission() {
         return current_user_can('manage_options');
     }
     
@@ -125,11 +181,11 @@ trait LEM_Trait_Rest_And_Webhooks {
             if (count($parts) !== 3) {
                 throw new \Exception('Invalid JWT format');
             }
-            $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
+            $payload = json_decode($this->jwt_base64_decode($parts[1]), true);
             if (!$payload) {
                 throw new \Exception('Invalid JWT payload');
             }
-            
+
             $jti = $payload['jti'] ?? null;
             if (!$jti) {
                 throw new \Exception('JTI not found in JWT payload');
@@ -261,657 +317,157 @@ trait LEM_Trait_Rest_And_Webhooks {
     }
     
     /**
-     * Get Mux stream status (active/idle) for dual-state player
+     * Get the active streaming provider, or a 503 WP_Error if none is configured.
+     */
+    private function active_streaming_provider_or_error() {
+        $provider = $this->get_streaming_provider();
+        if (!$provider) {
+            return new WP_Error('no_streaming_provider', 'No streaming provider is registered. Install a provider plugin (e.g. LEM Free Adaptors).', array('status' => 503));
+        }
+        return $provider;
+    }
+
+    /**
+     * Stream status — delegates to the active streaming provider.
      */
     public function get_stream_status($request) {
-        $settings = get_option('lem_settings', array());
-        $live_stream_id = $request->get_param('stream_id') ?: ($settings['mux_live_stream_id'] ?? '');
-        
-        if (empty($live_stream_id)) {
-            return new WP_Error('missing_stream_id', 'Stream ID is required', array('status' => 400));
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
         }
-        
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
-        }
-        
-        // Call Mux API to get live stream status
-        $url = "https://api.mux.com/video/v1/live-streams/{$live_stream_id}";
-        $response = wp_remote_get($url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            )
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (!$data || isset($data['error'])) {
-            return new WP_Error('mux_api_error', 'Failed to fetch stream status', array('status' => 500));
-        }
-        
-        $status = $data['data']['status'] ?? 'idle';
-        $is_active = $status === 'active';
-        
-        // Get most recent asset if stream is idle
-        $recent_asset = null;
-        if (!$is_active) {
-            $recent_asset = $this->get_most_recent_asset($live_stream_id, $credentials);
-        }
-        
-        return array(
-            'stream_id' => $live_stream_id,
-            'status' => $status,
-            'is_active' => $is_active,
-            'recent_asset' => $recent_asset
-        );
+        return $provider->get_stream_status($request->get_param('stream_id'));
     }
     
     /**
-     * Get RTMP stream key and ingest URL (cached for 1 hour)
+     * RTMP info — delegates to the active streaming provider.
      */
     public function get_rtmp_info($request) {
-        $settings = get_option('lem_settings', array());
-        $live_stream_id = $request->get_param('stream_id') ?: ($settings['mux_live_stream_id'] ?? '');
-        
-        if (empty($live_stream_id)) {
-            return new WP_Error('missing_stream_id', 'Stream ID is required', array('status' => 400));
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
         }
-        
-        // Cache RTMP info (rarely changes)
-        $redis = $this->get_redis_connection();
-        $cache_key = "mux:rtmp_info:{$live_stream_id}";
-        
-        if ($redis) {
-            $cached = $redis->get($cache_key);
-            if ($cached !== false) {
-                return json_decode($cached, true);
-            }
-        }
-        
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
-        }
-        
-        // Call Mux API to get live stream info
-        $url = "https://api.mux.com/video/v1/live-streams/{$live_stream_id}";
-        $response = wp_remote_get($url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            ),
-            'timeout' => 3
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (!$data || isset($data['error'])) {
-            return new WP_Error('mux_api_error', 'Failed to fetch RTMP info', array('status' => 500));
-        }
-        
-        $stream_data = $data['data'] ?? array();
-        
-        $result = array(
-            'stream_key' => $stream_data['stream_key'] ?? '',
-            'ingest_url' => $stream_data['reconnect_window'] ? 
-                ($stream_data['reconnect_window']['ingest_url'] ?? '') : 
-                ($stream_data['ingest_url'] ?? ''),
-            'playback_id' => $stream_data['playback_ids'][0]['id'] ?? ''
-        );
-        
-        // Cache for 1 hour (RTMP credentials rarely change)
-        if ($redis) {
-            $redis->setex($cache_key, 3600, json_encode($result));
-        }
-        
-        return $result;
+        return $provider->get_rtmp_info($request->get_param('stream_id'));
     }
     
     /**
-     * List all live streams from Mux
+     * List streams — delegates to the active provider's list_streams().
+     * Returns the same `{ data: [...], cached_at: ts }` shape the provider returns
+     * (for Mux) or wraps the provider's array result for callers that expect it.
      */
     public function list_live_streams($request, $bypass_cache = false) {
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
+        }
+        $limit  = (int) ($request->get_param('limit') ?: 100);
+        $result = $provider->list_streams($limit);
+
+        if (is_wp_error($result)) {
+            return $result;
         }
 
-        $redis     = $this->get_redis_connection();
-        $cache_key = 'mux:live_streams_list';
-
-        // Check cache unless caller wants fresh data
-        if (!$bypass_cache && $redis) {
-            $cached = $redis->get($cache_key);
-            if ($cached !== false) {
-                $decoded = json_decode($cached, true);
-                if (is_array($decoded)) {
-                    return $decoded;
-                }
-                // Corrupt entry — clear it and fall through to API
-                $redis->del($cache_key);
-            }
+        if (is_array($result) && isset($result['data'])) {
+            return $result;
         }
 
-        // Call Mux API
-        $url      = 'https://api.mux.com/video/v1/live-streams?limit=100';
-        $response = wp_remote_get($url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret']),
-            ),
-            'timeout' => 15,
-        ));
-
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-
-        $http_code = wp_remote_retrieve_response_code($response);
-        $body      = wp_remote_retrieve_body($response);
-        $data      = json_decode($body, true);
-
-        if ($http_code !== 200 || !is_array($data)) {
-            $msg = isset($data['error']['messages'][0]) ? $data['error']['messages'][0] : "HTTP {$http_code}: {$body}";
-            return new WP_Error('mux_api_error', $msg, array('status' => $http_code));
-        }
-
-        if (isset($data['error'])) {
-            return new WP_Error('mux_api_error', $data['error']['message'] ?? 'Mux API error', array('status' => 500));
-        }
-
-        $result = array(
-            'data'      => $data['data'] ?? array(),
+        return array(
+            'data'      => is_array($result) ? $result : array(),
             'cached_at' => time(),
         );
-
-        // Cache for 60 seconds — short enough to stay fresh, long enough to avoid hammering the API
-        if ($redis) {
-            $redis->setex($cache_key, 60, json_encode($result));
-        }
-
-        return $result;
     }
     
     /**
-     * Create a new live stream via Mux API
+     * Create a live stream — delegates to the active streaming provider.
      */
     public function create_live_stream($request) {
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
         }
-        
-        $passthrough = $request->get_param('passthrough') ?: '';
-        $reduced_latency = $request->get_param('reduced_latency');
-        $test_mode = $request->get_param('test_mode');
-        
-        // Get playback_policies for live stream from request, default to 'public' if not provided
-        $playback_policies = $request->get_param('playback_policies');
-        if (empty($playback_policies) || !is_array($playback_policies)) {
-            $playback_policies = array('public');
-        }
-        
-        // Ensure playback_policies is an array
-        if (is_string($playback_policies)) {
-            $playback_policies = array($playback_policies);
-        }
-        
-        // Validate playback policies (only allow 'public', 'signed', 'drm')
-        $valid_policies = array('public', 'signed', 'drm');
-        $playback_policies = array_filter($playback_policies, function($policy) use ($valid_policies) {
-            return in_array($policy, $valid_policies);
-        });
-        
-        // If no valid policies, default to 'public'
-        if (empty($playback_policies)) {
-            $playback_policies = array('public');
-        }
-        
-        // Get asset_playback_policies for recorded assets from request, default to 'public' if not provided
-        $asset_playback_policies = $request->get_param('asset_playback_policies');
-        if (empty($asset_playback_policies) || !is_array($asset_playback_policies)) {
-            // If not provided, use the same as playback_policies
-            $asset_playback_policies = $playback_policies;
-        }
-        
-        // Ensure asset_playback_policies is an array
-        if (is_string($asset_playback_policies)) {
-            $asset_playback_policies = array($asset_playback_policies);
-        }
-        
-        // Validate asset playback policies (only allow 'public', 'signed', 'drm')
-        $asset_playback_policies = array_filter($asset_playback_policies, function($policy) use ($valid_policies) {
-            return in_array($policy, $valid_policies);
-        });
-        
-        // If no valid policies, default to 'public'
-        if (empty($asset_playback_policies)) {
-            $asset_playback_policies = array('public');
-        }
-        
-        // Convert to boolean if needed
-        if ($reduced_latency === '1' || $reduced_latency === 'true' || $reduced_latency === true) {
-            $reduced_latency = true;
-        } else {
-            $reduced_latency = false;
-        }
-        
-        if ($test_mode === '1' || $test_mode === 'true' || $test_mode === true) {
-            $test_mode = true;
-        } else {
-            $test_mode = false;
-        }
-        
-        $payload = array();
-        
-        // Ensure arrays are properly indexed (not associative)
-        $playback_policies = array_values($playback_policies);
-        $asset_playback_policies = array_values($asset_playback_policies);
-        
-        // Set playback_policies for the live stream
-        $payload['playback_policies'] = $playback_policies;
-        
-        // Set playback_policies for recorded assets (separate from live stream)
-        $payload['new_asset_settings'] = array(
-            'playback_policies' => $asset_playback_policies
-        );
-        
-        if (!empty($passthrough)) {
-            $payload['passthrough'] = $passthrough;
-        }
-        if ($reduced_latency) {
-            $payload['reduced_latency'] = true;
-        }
-        if ($test_mode) {
-            $payload['test'] = true;
-        }
-        
-        // Log the payload for debugging
-        $this->debug_log('Creating Mux stream with payload', array(
-            'payload' => $payload,
-            'json' => json_encode($payload, JSON_PRETTY_PRINT)
-        ));
-        
-        // Call Mux API to create live stream
-        $url = 'https://api.mux.com/video/v1/live-streams';
-        $json_body = json_encode($payload);
-        
-        $response = wp_remote_post($url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret']),
-                'Content-Type' => 'application/json'
-            ),
-            'body' => $json_body,
-            'timeout' => 10
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (isset($data['error'])) {
-            return new WP_Error('mux_api_error', $data['error']['message'] ?? 'Failed to create live stream', array('status' => 500));
-        }
-        
-        // Clear cache
-        $redis = $this->get_redis_connection();
-        if ($redis) {
-            $redis->del('mux:live_streams_list');
-        }
-        
-        // Return the stream data - Mux API wraps it in 'data' key
-        $stream_data = $data['data'] ?? $data;
-        
-        // Ensure we return the full stream object with ID and playback_ids
-        if (is_array($stream_data)) {
-            if (!isset($stream_data['id']) && isset($data['data']['id'])) {
-                $stream_data['id'] = $data['data']['id'];
-            }
-            // Ensure playback_ids are included
-            if (!isset($stream_data['playback_ids']) && isset($data['data']['playback_ids'])) {
-                $stream_data['playback_ids'] = $data['data']['playback_ids'];
-            }
-        }
-        
-        return $stream_data;
+        $params = $request->get_params();
+        return $provider->create_stream($params);
     }
     
     /**
-     * Delete a live stream via Mux API
+     * Delete a live stream — delegates to the active streaming provider.
      */
     public function delete_live_stream($request) {
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
         }
-        
-        // Get stream ID from URL parameters (REST route pattern: /live-streams/(?P<id>...)
         $url_params = $request->get_url_params();
-        $stream_id = $url_params['id'] ?? '';
-        
-        // Fallback: try regular param
+        $stream_id  = $url_params['id'] ?? $request->get_param('id');
         if (empty($stream_id)) {
-            $stream_id = $request->get_param('id');
-        }
-        
-        if (empty($stream_id)) {
-            $this->debug_log('Delete stream: Missing stream ID', array(
-                'url_params' => $url_params,
-                'all_params' => $request->get_params()
-            ));
             return new WP_Error('missing_stream_id', 'Stream ID is required', array('status' => 400));
         }
-        
-        // Call Mux API to delete live stream
-        $url = "https://api.mux.com/video/v1/live-streams/{$stream_id}";
-        $response = wp_remote_request($url, array(
-            'method' => 'DELETE',
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            ),
-            'timeout' => 10
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $code = wp_remote_retrieve_response_code($response);
-        
-        // Clear cache
-        $redis = $this->get_redis_connection();
-        if ($redis) {
-            $redis->del('mux:live_streams_list');
-        }
-        
-        if ($code === 204 || $code === 200) {
-            return array('success' => true, 'message' => 'Stream deleted successfully');
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (isset($data['error'])) {
-            return new WP_Error('mux_api_error', $data['error']['message'] ?? 'Failed to delete live stream', array('status' => 500));
-        }
-        
-        return array('success' => true);
+        return $provider->delete_stream($stream_id);
     }
     
     /**
-     * Update a live stream via Mux API
+     * Update a live stream — delegates to the active streaming provider.
      */
     public function update_live_stream($request) {
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
         }
-        
-        // Get stream ID from URL parameters (REST route pattern: /live-streams/(?P<id>...)
         $url_params = $request->get_url_params();
-        $stream_id = $url_params['id'] ?? '';
-        
-        // Fallback: try regular param
+        $stream_id  = $url_params['id'] ?? $request->get_param('id');
         if (empty($stream_id)) {
-            $stream_id = $request->get_param('id');
-        }
-        
-        if (empty($stream_id)) {
-            $this->debug_log('Update stream: Missing stream ID', array(
-                'url_params' => $url_params,
-                'all_params' => $request->get_params()
-            ));
             return new WP_Error('missing_stream_id', 'Stream ID is required', array('status' => 400));
         }
-        
-        $passthrough = $request->get_param('passthrough');
-        $reduced_latency = $request->get_param('reduced_latency');
-        
-        // Convert to boolean if needed
-        if ($reduced_latency === '1' || $reduced_latency === 'true' || $reduced_latency === true) {
-            $reduced_latency = true;
-        } else {
-            $reduced_latency = false;
-        }
-        
-        $payload = array();
-        if ($passthrough !== null && $passthrough !== '') {
-            $payload['passthrough'] = $passthrough;
-        }
-        if ($reduced_latency !== null) {
-            $payload['reduced_latency'] = $reduced_latency;
-        }
-        
-        if (empty($payload)) {
-            return new WP_Error('missing_params', 'No update parameters provided', array('status' => 400));
-        }
-        
-        // Call Mux API to update live stream
-        $url = "https://api.mux.com/video/v1/live-streams/{$stream_id}";
-        $response = wp_remote_request($url, array(
-            'method' => 'PUT',
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret']),
-                'Content-Type' => 'application/json'
-            ),
-            'body' => json_encode($payload),
-            'timeout' => 10
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (isset($data['error'])) {
-            return new WP_Error('mux_api_error', $data['error']['message'] ?? 'Failed to update live stream', array('status' => 500));
-        }
-        
-        // Clear cache
-        $redis = $this->get_redis_connection();
-        if ($redis) {
-            $redis->del('mux:live_streams_list');
-        }
-        
-        return $data['data'] ?? $data;
+        $params = $request->get_params();
+        unset($params['id']);
+        return $provider->update_stream($stream_id, $params);
     }
     
     /**
-     * Get Simulcast targets
+     * List simulcast targets — delegates to the active streaming provider.
      */
     public function get_simulcast_targets($request) {
-        $settings = get_option('lem_settings', array());
-        $live_stream_id = $request->get_param('stream_id') ?: ($settings['mux_live_stream_id'] ?? '');
-        
-        if (empty($live_stream_id)) {
-            return new WP_Error('missing_stream_id', 'Stream ID is required', array('status' => 400));
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
         }
-        
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
+        $stream_id = $request->get_param('stream_id');
+        $result    = $provider->list_simulcast_targets($stream_id ?: null);
+        if (is_wp_error($result)) {
+            return $result;
         }
-        
-        // Call Mux API to get simulcast targets
-        $url = "https://api.mux.com/video/v1/live-streams/{$live_stream_id}/simulcast-targets";
-        $response = wp_remote_get($url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            )
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        // Mux API returns data directly as array, not wrapped
-        // Check if it's already an array or wrapped in 'data'
-        if (isset($data['data']) && is_array($data['data'])) {
-            return $data['data'];
-        }
-        
-        // If it's already an array, return it
-        if (is_array($data)) {
-            return $data;
-        }
-        
-        return array();
+        return is_array($result) ? $result : array();
     }
-    
+
     /**
-     * Create Simulcast target
+     * Create simulcast target — delegates to the active streaming provider.
      */
     public function create_simulcast_target($request) {
-        $settings = get_option('lem_settings', array());
-        $live_stream_id = $request->get_param('stream_id') ?: ($settings['mux_live_stream_id'] ?? '');
-        $url = $request->get_param('url');
-        $stream_key = $request->get_param('stream_key');
-        
-        if (empty($live_stream_id) || empty($url)) {
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
+        }
+        $stream_id = $request->get_param('stream_id');
+        $url       = $request->get_param('url');
+        if (empty($stream_id) || empty($url)) {
             return new WP_Error('missing_params', 'Stream ID and URL are required', array('status' => 400));
         }
-        
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
-        }
-        
-        $payload = array('url' => $url);
-        if (!empty($stream_key)) {
-            $payload['stream_key'] = $stream_key;
-        }
-        
-        // Call Mux API to create simulcast target
-        $api_url = "https://api.mux.com/video/v1/live-streams/{$live_stream_id}/simulcast-targets";
-        $response = wp_remote_post($api_url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret']),
-                'Content-Type' => 'application/json'
-            ),
-            'body' => json_encode($payload)
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (isset($data['error'])) {
-            return new WP_Error('mux_api_error', $data['error']['message'] ?? 'Failed to create simulcast target', array('status' => 500));
-        }
-        
-        return $data['data'] ?? array();
+        return $provider->create_simulcast_target($stream_id, $url);
     }
-    
+
     /**
-     * Delete Simulcast target
+     * Delete simulcast target — delegates to the active streaming provider.
      */
     public function delete_simulcast_target($request) {
-        $settings = get_option('lem_settings', array());
-        $live_stream_id = $request->get_param('stream_id') ?: ($settings['mux_live_stream_id'] ?? '');
+        $provider = $this->streaming_provider_from_request_or_active($request);
+        if (is_wp_error($provider)) {
+            return $provider;
+        }
+        $stream_id = $request->get_param('stream_id');
         $target_id = $request->get_param('id');
-        
-        if (empty($live_stream_id) || empty($target_id)) {
+        if (empty($stream_id) || empty($target_id)) {
             return new WP_Error('missing_params', 'Stream ID and target ID are required', array('status' => 400));
         }
-        
-        $credentials = $this->get_mux_api_credentials();
-        if (!$credentials) {
-            return new WP_Error('mux_not_configured', 'Mux API credentials not configured', array('status' => 500));
-        }
-        
-        // Call Mux API to delete simulcast target
-        $url = "https://api.mux.com/video/v1/live-streams/{$live_stream_id}/simulcast-targets/{$target_id}";
-        $response = wp_remote_request($url, array(
-            'method' => 'DELETE',
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            )
-        ));
-        
-        if (is_wp_error($response)) {
-            return new WP_Error('mux_api_error', $response->get_error_message(), array('status' => 500));
-        }
-        
-        $code = wp_remote_retrieve_response_code($response);
-        if ($code >= 200 && $code < 300) {
-            return array('success' => true);
-        }
-        
-        return new WP_Error('mux_api_error', 'Failed to delete simulcast target', array('status' => 500));
-    }
-    
-    /**
-     * Get most recent asset for a live stream
-     */
-    private function get_most_recent_asset($live_stream_id, $credentials) {
-        // Get assets for this stream
-        $url = "https://api.mux.com/video/v1/live-streams/{$live_stream_id}";
-        $response = wp_remote_get($url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            )
-        ));
-        
-        if (is_wp_error($response)) {
-            return null;
-        }
-        
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        if (!$data || !isset($data['data']['recent_asset_ids']) || empty($data['data']['recent_asset_ids'])) {
-            return null;
-        }
-        
-        // Get the most recent asset
-        $asset_id = $data['data']['recent_asset_ids'][0];
-        $asset_url = "https://api.mux.com/video/v1/assets/{$asset_id}";
-        $asset_response = wp_remote_get($asset_url, array(
-            'headers' => array(
-                'Authorization' => 'Basic ' . base64_encode($credentials['token_id'] . ':' . $credentials['token_secret'])
-            )
-        ));
-        
-        if (is_wp_error($asset_response)) {
-            return null;
-        }
-        
-        $asset_body = wp_remote_retrieve_body($asset_response);
-        $asset_data = json_decode($asset_body, true);
-        
-        if (!$asset_data || !isset($asset_data['data'])) {
-            return null;
-        }
-        
-        $asset = $asset_data['data'];
-        $playback_id = $asset['playback_ids'][0]['id'] ?? '';
-        
-        return array(
-            'asset_id' => $asset_id,
-            'playback_id' => $playback_id,
-            'status' => $asset['status'] ?? '',
-            'duration' => $asset['duration'] ?? 0
-        );
+        return $provider->delete_simulcast_target($stream_id, $target_id);
     }
     
     // Direct JWT validation method (legacy)
@@ -930,7 +486,7 @@ trait LEM_Trait_Rest_And_Webhooks {
             if (count($parts) !== 3) {
                 throw new \Exception('Invalid JWT format');
             }
-            $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
+            $payload = json_decode($this->jwt_base64_decode($parts[1]), true);
             if (!$payload) {
                 throw new \Exception('Invalid JWT payload');
             }
@@ -1085,238 +641,206 @@ trait LEM_Trait_Rest_And_Webhooks {
     // Test endpoint for JWT verification (development only)
 
     
-    // Handle Stripe webhook
-    public function handle_stripe_webhook() {
-        $this->debug_log('Stripe webhook received');
-        
-        $settings = get_option('lem_settings', array());
-        $webhook_secret = $settings['stripe_mode'] === 'live' 
-            ? $settings['stripe_live_webhook_secret'] 
-            : $settings['stripe_test_webhook_secret'];
-        
-        if (empty($webhook_secret)) {
-            $this->debug_log('Webhook secret not configured');
-            status_header(400);
-            wp_die('Webhook secret not configured', 'Webhook Error', array('response' => 400));
-        }
-
-        $payload = @file_get_contents('php://input');
-        $sig_header = $_SERVER['HTTP_STRIPE_SIGNATURE'] ?? '';
-        if (empty($sig_header)) {
-            $this->debug_log('Missing Stripe-Signature header');
-            status_header(400);
-            wp_die('Missing signature', 'Webhook Error', array('response' => 400));
-        }
-
-        try {
-            // Check if Stripe library is available
-            if (!class_exists('\Stripe\Webhook')) {
-                $this->debug_log('Stripe library not available');
-                status_header(500);
-                wp_die('Stripe library not available', 'Webhook Error', array('response' => 500));
-            }
-
-            $event = \Stripe\Webhook::constructEvent($payload, $sig_header, $webhook_secret);
-        } catch(\UnexpectedValueException $e) {
-            $this->debug_log('Invalid payload: ' . $e->getMessage());
-            status_header(400);
-            wp_die('Invalid payload', 'Webhook Error', array('response' => 400));
-        } catch(\Stripe\Exception\SignatureVerificationException $e) {
-            $this->debug_log('Invalid signature: ' . $e->getMessage());
-            status_header(400);
-            wp_die('Invalid signature', 'Webhook Error', array('response' => 400));
-        }
-        
-        $this->debug_log('Webhook event: ' . $event->type);
-        
-        if ($event->type === 'checkout.session.completed') {
-            $session = $event->data->object;
-            $event_id = $session->metadata->event_id ?? null;
-            // Prefer the email we stored at checkout time; fall back to what Stripe collected
-            $email = $session->metadata->email ?? $session->customer_details->email ?? null;
-
-            if ($event_id && $email) {
-                $this->debug_log('Processing payment for event: ' . $event_id . ', email: ' . $this->redact_email($email));
-
-                global $wpdb;
-                $table = $wpdb->prefix . 'lem_jwt_tokens';
-                
-                // Check for existing JWT with this payment_id (session_id)
-                $existing_token = $wpdb->get_row($wpdb->prepare(
-                    "SELECT jti, jwt_token, created_at FROM $table WHERE payment_id = %s AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
-                    $session->id
-                ));
-
-                if ($existing_token) {
-                    $this->debug_log('Stripe webhook duplicate detected. Skipping JWT regeneration.', array(
-                        'session_id' => $session->id,
-                        'event_id' => $event_id,
-                        'email' => $this->redact_email($email),
-                        'existing_jti' => $existing_token->jti
-                    ));
-                    
-                    // Still send the magic link email if it hasn't been sent yet
-                    // Check if magic link was already sent by checking if session exists
-                    $redis = $this->get_redis_connection();
-                    $session_id_from_jti = null;
-                    if ($redis) {
-                        $session_id_from_jti = $redis->get("jti_session:{$existing_token->jti}");
-                    }
-                    
-                    // If no session exists, send the magic link email
-                    if (!$session_id_from_jti) {
-                        $this->magic_link_service->send_magic_link_email($email, $existing_token->jwt_token, $event_id, null);
-                        $this->debug_log('Magic link email sent for existing JWT', array(
-                            'session_id' => $session->id,
-                            'jti' => $existing_token->jti
-                        ));
-                    }
-                } else {
-                    if ($this->magic_link_service->has_valid_ticket($email, $event_id)) {
-                        $this->debug_log('Stripe webhook: skipped issuing access — email already has valid access for this event', array(
-                            'email'      => $this->redact_email($email),
-                            'event_id'   => $event_id,
-                            'session_id' => $session->id,
-                        ));
-                    } else {
-                        // Store email as valid access before generating JWT
-                        $this->store_event_email($event_id, $email);
-
-                        // Generate playback token (paid events)
-                        $jwt_result = $this->generate_jwt($email, $event_id, $session->id);
-                        if ($jwt_result && isset($jwt_result['jwt'])) {
-                            $sid = $this->create_session($event_id, $email);
-                            $jti_for_session = $jwt_result['jti'] ?? '';
-                            if (!empty($jti_for_session)) {
-                                $r = $this->get_redis_connection();
-                                if ($r) {
-                                    $r->setex("jti_session:{$jti_for_session}", 24 * 60 * 60, $sid);
-                                }
-                            }
-                            $this->magic_link_service->send_magic_link_email($email, $jwt_result['jwt'], $event_id, $sid);
-                            $this->debug_log('JWT generated and email sent for payment', array(
-                                'session_id' => $session->id,
-                                'event_id'   => $event_id,
-                                'email'      => $this->redact_email($email),
-                                'jti'        => $jwt_result['jti'] ?? 'unknown',
-                            ));
-                        } else {
-                            $this->debug_log('Failed to generate JWT for payment', array(
-                                'session_id' => $session->id,
-                                'event_id'   => $event_id,
-                                'email'      => $this->redact_email($email),
-                            ));
-                        }
-                    }
-                }
-            } else {
-                $this->debug_log('Missing event_id or email in session metadata', array(
-                    'session_id' => $session->id,
-                    'event_id' => $event_id,
-                    'has_email' => !empty($email),
-                ));
-            }
-        }
-
-        status_header(200);
-        wp_die('Webhook processed', '', array('response' => 200));
+    /**
+     * Log a webhook event to {prefix}lem_webhook_log so admins can verify
+     * Stripe / PayPal are reaching the endpoint without tailing debug.log.
+     * Keeps only the most recent 200 rows.
+     */
+    private function log_webhook($status, $data = array()) {
+        LEM_Webhook_Log::record($status, $data);
     }
 
     /**
-     * Handle Mux webhook events
-     * Specifically handles video.asset.ready to create "Past Stream" posts
+     * Streaming/asset webhook dispatcher.
+     *
+     * Route: POST /lem/v1/webhooks/streaming/{provider}
+     *
+     * Looks up the provider by ID and delegates verification + handling to its
+     * handle_webhook() method. Providers read vendor-specific signature headers
+     * directly from $_SERVER if they need to.
+     *
+     * @param WP_REST_Request $request
      */
-    public function handle_mux_webhook() {
-        $this->debug_log('Mux webhook received');
-        
-        $payload = @file_get_contents('php://input');
-        $signature = $_SERVER['HTTP_MUX_SIGNATURE'] ?? '';
-        
-        // Verify webhook signature if configured
-        $settings = get_option('lem_settings', array());
-        $webhook_secret = $settings['mux_webhook_secret'] ?? '';
-        
-        if (empty($webhook_secret)) {
-            $this->debug_log('Mux webhook secret not configured — rejecting request');
-            status_header(403);
-            wp_die('Webhook secret not configured', 'Webhook Error', array('response' => 403));
+    public function handle_streaming_webhook($request) {
+        $provider_id = $request->get_param('provider');
+        $factory     = LEM_Streaming_Provider_Factory::get_instance();
+        $provider    = $factory->get_provider($provider_id, $this);
+
+        if (!$provider || $provider->get_id() !== $provider_id) {
+            $this->log_webhook('failed', array(
+                'provider' => $provider_id,
+                'message'  => 'Streaming provider not registered',
+            ));
+            return new WP_REST_Response(array('error' => 'unknown provider'), 404);
         }
 
-        $expected_signature = hash_hmac('sha256', $payload, $webhook_secret);
-        if (!hash_equals($expected_signature, $signature)) {
-            $this->debug_log('Invalid Mux webhook signature');
-            status_header(401);
-            wp_die('Invalid signature', 'Webhook Error', array('response' => 401));
+        $payload   = $request->get_body();
+        $signature = $request->get_header('mux-signature') ?: null;
+
+        $result = $provider->handle_webhook($payload, $signature);
+
+        if (is_wp_error($result)) {
+            $code = $result->get_error_code();
+            $http = in_array($code, array('invalid_payload', 'invalid_signature', 'missing_signature'), true) ? 400 : 500;
+            $this->log_webhook('verification_failed', array(
+                'provider' => $provider_id,
+                'message'  => '[' . $code . '] ' . $result->get_error_message(),
+            ));
+            return new WP_REST_Response(array('error' => $result->get_error_message()), $http);
         }
 
-        $event = json_decode($payload, true);
+        $this->log_webhook('processed', array(
+            'provider'   => $provider_id,
+            'event_type' => is_array($result) ? ($result['type'] ?? null) : null,
+            'message'    => 'Streaming webhook handled by provider',
+        ));
 
-        if (!$event) {
-            $this->debug_log('Invalid Mux webhook payload');
-            status_header(400);
-            wp_die('Invalid payload', 'Webhook Error', array('response' => 400));
+        do_action('lem_streaming_webhook_received', $provider_id, $result);
+
+        return new WP_REST_Response(array('ok' => true), 200);
+    }
+
+    // Single payment webhook entry-point — routes to whichever provider is active.
+    public function handle_payment_webhook() {
+        $this->debug_log('Payment webhook received');
+
+        // Auto-detect provider from request headers so a single webhook URL works for
+        // both Stripe and PayPal regardless of which one is configured as the global default.
+        $factory = LEM_Payment_Provider_Factory::get_instance();
+        $detected_via_header = false;
+        if (isset($_SERVER['HTTP_STRIPE_SIGNATURE'])) {
+            $provider = $factory->get_provider('stripe');
+            $detected_via_header = true;
+        } elseif (isset($_SERVER['HTTP_PAYPAL_TRANSMISSION_SIG'])) {
+            $provider = $factory->get_provider('paypal');
+            $detected_via_header = true;
+        } else {
+            $provider = $factory->get_active_provider();
         }
-        
-        $event_type = $event['type'] ?? '';
-        $this->debug_log('Mux webhook event: ' . $event_type);
-        
-        // Handle video.asset.ready event
-        if ($event_type === 'video.asset.ready') {
-            $asset_data = $event['data'] ?? array();
-            $asset_id = $asset_data['id'] ?? '';
-            $playback_id = $asset_data['playback_ids'][0]['id'] ?? '';
-            $status = $asset_data['status'] ?? '';
-            
-            if ($asset_id && $playback_id && $status === 'ready') {
-                // Find the event that matches this playback_id
-                $events = get_posts(array(
-                    'post_type' => 'lem_event',
-                    'meta_key' => '_lem_playback_id',
-                    'meta_value' => $playback_id,
-                    'posts_per_page' => 1
-                ));
-                
-                if (!empty($events)) {
-                    $event_post = $events[0];
-                    $event_id = $event_post->ID;
-                    
-                    // Create a "Past Stream" post
-                    $past_stream_title = 'Past Stream: ' . $event_post->post_title;
-                    $past_stream_id = wp_insert_post(array(
-                        'post_title' => $past_stream_title,
-                        'post_content' => 'This is an automatically created past stream recording.',
-                        'post_status' => 'publish',
-                        'post_type' => 'lem_event',
-                        'post_parent' => $event_id,
-                        'meta_input' => array(
-                            '_lem_playback_id' => $playback_id,
-                            '_lem_asset_id' => $asset_id,
-                            '_lem_is_past_stream' => '1',
-                            '_lem_original_event_id' => $event_id,
-                            '_lem_status' => 'past'
-                        )
+
+        $provider_id = $provider ? $provider->get_id() : null;
+
+        // Log entry: every webhook hit, even invalid ones
+        $this->log_webhook('received', array(
+            'provider'      => $provider_id,
+            'has_signature' => $detected_via_header,
+            'message'       => $detected_via_header
+                ? 'Provider detected from request header'
+                : 'No provider header detected — using active default',
+        ));
+
+        if (!$provider) {
+            $this->log_webhook('failed', array('message' => 'Payment provider not available'));
+            status_header(500);
+            wp_die('Payment provider not available', 'Webhook Error', array('response' => 500));
+        }
+
+        $parsed = $provider->verify_webhook();
+
+        if (is_wp_error($parsed)) {
+            $code = $parsed->get_error_code();
+            $http = in_array($code, array('invalid_payload', 'invalid_signature', 'missing_signature'), true) ? 400 : 500;
+            $this->debug_log('Webhook verification failed: ' . $parsed->get_error_message());
+            $this->log_webhook('verification_failed', array(
+                'provider'      => $provider_id,
+                'has_signature' => $detected_via_header,
+                'message'       => '[' . $code . '] ' . $parsed->get_error_message(),
+            ));
+            status_header($http);
+            wp_die($parsed->get_error_message(), 'Webhook Error', array('response' => $http));
+        }
+
+        $this->debug_log('Webhook event type: ' . ($parsed['type'] ?? 'unknown'));
+
+        // Allow companion plugins to handle non-checkout events.
+        do_action('lem_webhook_event_received', $parsed, $provider->get_id());
+
+        if (($parsed['type'] ?? '') !== 'checkout.completed') {
+            $this->log_webhook('skipped', array(
+                'provider'   => $provider_id,
+                'event_type' => $parsed['type'] ?? 'unknown',
+                'message'    => 'Non-checkout event — acknowledged but not processed',
+            ));
+            status_header(200);
+            wp_die('OK', '', array('response' => 200));
+        }
+
+        $payment_id = $parsed['payment_id'] ?? null;
+        $event_id   = $parsed['event_id']   ?? null;
+        $email      = $parsed['email']       ?? null;
+
+        if (!$event_id || !$email) {
+            $this->debug_log('Webhook: missing event_id or email', array(
+                'payment_id' => $payment_id,
+                'event_id'   => $event_id,
+                'has_email'  => !empty($email),
+            ));
+            $this->log_webhook('missing_metadata', array(
+                'provider'   => $provider_id,
+                'event_type' => $parsed['type'] ?? null,
+                'payment_id' => $payment_id,
+                'event_id'   => $event_id,
+                'email'      => $email,
+                'message'    => 'Webhook verified but missing event_id or email in metadata. Check checkout session metadata.',
+            ));
+            status_header(200);
+            wp_die('OK', '', array('response' => 200));
+        }
+
+        $this->debug_log('Processing payment for event: ' . $event_id . ', email: ' . $this->redact_email($email));
+
+        $fulfill = $this->fulfill_paid_checkout($payment_id, $event_id, $email, $provider_id, 'webhook');
+
+        if (is_wp_error($fulfill)) {
+            $this->log_webhook('jwt_failed', array(
+                'provider'   => $provider_id,
+                'event_type' => $parsed['type'],
+                'payment_id' => $payment_id,
+                'event_id'   => $event_id,
+                'email'      => $email,
+                'message'    => 'JWT generation failed: ' . $fulfill->get_error_message(),
+            ));
+            // Return 500 so Stripe automatically retries the webhook delivery.
+            // On success the handler returns 200 below, which stops retries.
+            status_header(500);
+            wp_die('JWT generation failed', 'Webhook Error', array('response' => 500));
+        } elseif (is_array($fulfill)) {
+            switch ($fulfill['status']) {
+                case 'duplicate':
+                    $this->log_webhook('duplicate', array(
+                        'provider'   => $provider_id,
+                        'event_type' => $parsed['type'],
+                        'payment_id' => $payment_id,
+                        'event_id'   => $event_id,
+                        'email'      => $email,
+                        'message'    => 'Duplicate payment — JWT already issued (jti: ' . ($fulfill['jti'] ?? '?') . ')',
                     ));
-                    
-                    if ($past_stream_id && !is_wp_error($past_stream_id)) {
-                        $this->debug_log('Past stream post created', array(
-                            'past_stream_id' => $past_stream_id,
-                            'original_event_id' => $event_id,
-                            'asset_id' => $asset_id,
-                            'playback_id' => $playback_id
-                        ));
-                    } else {
-                        $this->debug_log('Failed to create past stream post', array(
-                            'error' => is_wp_error($past_stream_id) ? $past_stream_id->get_error_message() : 'Unknown error'
-                        ));
-                    }
-                } else {
-                    $this->debug_log('No event found for playback_id', array('playback_id' => $playback_id));
-                }
+                    break;
+                case 'already_has_access':
+                    $this->log_webhook('already_has_access', array(
+                        'provider'   => $provider_id,
+                        'event_type' => $parsed['type'],
+                        'payment_id' => $payment_id,
+                        'event_id'   => $event_id,
+                        'email'      => $email,
+                        'message'    => 'Email already has a valid ticket for this event',
+                    ));
+                    break;
+                case 'granted':
+                    $this->log_webhook('processed', array(
+                        'provider'   => $provider_id,
+                        'event_type' => $parsed['type'],
+                        'payment_id' => $payment_id,
+                        'event_id'   => $event_id,
+                        'email'      => $email,
+                        'message'    => 'JWT issued (jti: ' . ($fulfill['jti'] ?? '?') . ') and magic link emailed',
+                    ));
+                    break;
             }
         }
 
         status_header(200);
-        wp_die('Webhook processed', '', array('response' => 200));
+        wp_die('OK', '', array('response' => 200));
     }
 
     // Get client IP address (handles proxies and load balancers)
@@ -1374,7 +898,7 @@ trait LEM_Trait_Rest_And_Webhooks {
     /**
      * Redact an email address for safe logging.
      */
-    private function redact_email($email) {
+    public function redact_email($email) {
         if (empty($email) || !is_string($email)) return '[empty]';
         $parts = explode('@', $email);
         if (count($parts) !== 2) return '[invalid]';
@@ -1463,7 +987,7 @@ trait LEM_Trait_Rest_And_Webhooks {
                         // Extract JTI from JWT to check revocation
                         $jwt_parts = explode('.', $state['jwt_token']);
                         if (count($jwt_parts) === 3) {
-                            $payload = json_decode(base64_decode(strtr($jwt_parts[1], '-_', '+/')), true);
+                            $payload = json_decode($this->jwt_base64_decode($jwt_parts[1]), true);
                             $jti = $payload['custom']['jti'] ?? '';
                             
                             if (!empty($jti)) {
@@ -1572,6 +1096,9 @@ trait LEM_Trait_Rest_And_Webhooks {
             $ttl = $state['can_watch'] ? 300 : 30; // 5 min for valid, 30 sec for errors
             $redis->setex($cache_key, $ttl, json_encode($state));
         }
+
+        // Allow companion plugins to augment or override the access state.
+        $state = (array) apply_filters('lem_event_access_state', $state, $event_id);
 
         // Store in memory cache
         $this->event_access_cache[$event_id] = $state;
@@ -1787,47 +1314,26 @@ trait LEM_Trait_Rest_And_Webhooks {
             return;
         }
 
-        $settings = get_option('lem_settings', []);
-        $ably_key = trim($settings['ably_api_key'] ?? '');
-        if (empty($ably_key) || strpos($ably_key, ':') === false) {
-            wp_send_json_error('Ably not configured', 503);
+        $chat = LEM_Chat_Provider_Factory::get_instance()->get_active_provider();
+        if ($chat === null || ! $chat->is_configured()) {
+            wp_send_json_error('Chat not configured', 503);
             return;
         }
 
-        $colon_pos  = strrpos($ably_key, ':');
-        $key_name   = substr($ably_key, 0, $colon_pos);
-        $key_secret = substr($ably_key, $colon_pos + 1);
+        $token = $chat->issue_viewer_token(
+            (string) $event_id,
+            (string) ( $access['email'] ?? '' ),
+            (string) ( $access['chat_name'] ?? 'Viewer' ),
+            array( 'client_id' => (string) ( $access['session_id'] ?? $session_id ) )
+        );
 
-        // Use the session ID as the clientId so each device has a stable identity.
-        $client_id   = $access['session_id'] ?? $session_id;
-        $channel     = 'lem:chat:' . $event_id;
-        $capability  = wp_json_encode([$channel => ['subscribe', 'publish', 'presence', 'history']]);
-        $ttl         = 3600 * 1000; // 1 hour in ms
-        $timestamp   = (int) round(microtime(true) * 1000);
-        $nonce       = bin2hex(random_bytes(8));
+        if (is_wp_error($token)) {
+            wp_send_json_error($token->get_error_message(), 503);
+            return;
+        }
 
-        // Ably HMAC-SHA256 signing string (each field on its own line, trailing newline).
-        $sign_string = implode("\n", [
-            $key_name,
-            $ttl,
-            $capability,
-            $client_id,
-            $timestamp,
-            $nonce,
-            '', // trailing newline required by spec
-        ]);
-
-        $mac = base64_encode(hash_hmac('sha256', $sign_string, $key_secret, true));
-
-        wp_send_json_success([
-            'keyName'    => $key_name,
-            'clientId'   => $client_id,
-            'nonce'      => $nonce,
-            'timestamp'  => $timestamp,
-            'capability' => $capability,
-            'ttl'        => $ttl,
-            'mac'        => $mac,
-        ]);
+        unset($token['channel'], $token['expires_at']);
+        wp_send_json_success($token);
     }
 
     // AJAX handler for saving JWT settings

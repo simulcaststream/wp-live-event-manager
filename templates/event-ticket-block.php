@@ -106,11 +106,12 @@ window.lemSessionId = <?php echo wp_json_encode($session_id); ?>;
         <div class="lem-section lem-stack">
             <h2><?php esc_html_e('Need a new link?', 'live-event-manager'); ?></h2>
             <p><?php esc_html_e('Switching devices or lost the email? Reissue your magic link in seconds.', 'live-event-manager'); ?></p>
-            <form method="post" class="lem-form" style="max-width: 420px; margin:0 auto;">
+            <form method="post" class="lem-resend-form" style="max-width: 420px; margin:0 auto;" data-event-id="<?php echo esc_attr($event_id); ?>">
                 <?php wp_nonce_field('lem_request_new_link', 'lem_new_link_nonce'); ?>
                 <label for="lem_email_<?php echo esc_attr($event_id); ?>" class="lem-form-label"><?php esc_html_e('Email address', 'live-event-manager'); ?></label>
-                <input type="email" id="lem_email_<?php echo esc_attr($event_id); ?>" name="email" class="lem-input" placeholder="you@example.com" required>
+                <input type="email" id="lem_email_<?php echo esc_attr($event_id); ?>" name="email" class="lem-input lem-resend-email" placeholder="you@example.com" required>
                 <input type="hidden" name="lem_event_id" value="<?php echo esc_attr($event_id); ?>">
+                <div class="lem-resend-message" style="display:none;margin:.75rem 0;"></div>
                 <p><button type="submit" name="lem_request_new_link" class="lem-button lem-button-primary"><?php esc_html_e('Send me a fresh link', 'live-event-manager'); ?></button></p>
             </form>
         </div>
@@ -211,14 +212,15 @@ window.lemSessionId = <?php echo wp_json_encode($session_id); ?>;
                 <div class="lem-message lem-message-error"><?php echo esc_html($error_message); ?></div>
             <?php endif; ?>
 
-            <form method="post" class="lem-resend-form">
+            <form method="post" class="lem-resend-form" data-event-id="<?php echo esc_attr($event_id); ?>">
                 <?php wp_nonce_field('lem_request_new_link', 'lem_new_link_nonce'); ?>
+                <div class="lem-resend-message" style="display:none;margin-bottom:.75rem;"></div>
                 <div class="lem-input-icon-wrap">
                     <svg class="lem-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
                         <polyline points="22,6 12,13 2,6"></polyline>
                     </svg>
-                    <input type="email" name="email" class="lem-email-input" placeholder="you@example.com" autocomplete="email" required>
+                    <input type="email" name="email" class="lem-email-input lem-resend-email" placeholder="you@example.com" autocomplete="email" required>
                 </div>
                 <input type="hidden" name="lem_event_id" value="<?php echo esc_attr($event_id); ?>">
                 <button type="submit" name="lem_request_new_link" class="lem-ticket-button" style="margin-top:0.75rem;">

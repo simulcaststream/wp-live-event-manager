@@ -236,6 +236,21 @@ class LEM_Cache {
     }
 
     /**
+     * Atomic SET key value NX EX ttl.
+     *
+     * Unlike setnx() + setex() (two round-trips), this single command guarantees
+     * that the key is either created with a TTL or not created at all — no window
+     * where the key could exist without an expiry if the process crashes between
+     * the two separate calls.
+     *
+     * Returns true if the key was set (i.e. did not already exist), false otherwise.
+     */
+    public function set_nx_ex(string $key, $value, int $ttl): bool {
+        $result = $this->request(['SET', $key, $value, 'NX', 'EX', $ttl]);
+        return $result === 'OK';
+    }
+
+    /**
      * Delete one or more keys. Returns the number of keys deleted.
      *
      * @param string|string[] $key
@@ -366,6 +381,7 @@ class LEM_Cache {
         );
         echo '</p></div>';
     }
+
 }
 
 
@@ -406,6 +422,12 @@ class LEM_Cache_Pipeline {
     /** Argument order: key, ttl, value (matches phpredis SETEX). */
     public function setex(string $key, int $ttl, $value): self {
         $this->commands[] = ['SETEX', $key, $ttl, $value];
+        return $this;
+    }
+
+    /** Atomic SET key value NX EX ttl — see LEM_Cache::set_nx_ex(). */
+    public function set_nx_ex(string $key, $value, int $ttl): self {
+        $this->commands[] = ['SET', $key, $value, 'NX', 'EX', $ttl];
         return $this;
     }
 

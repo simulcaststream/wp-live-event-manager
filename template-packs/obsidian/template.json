@@ -1,7 +1,9 @@
 {
+  "lem_format":  1,
   "name":        "Obsidian",
-  "slug":        "premium-dark",
+  "slug":        "obsidian",
   "version":     "1.0.0",
+  "requires_lem": ">=1.0.0",
   "description": "A cinematic full-screen streaming experience. Deep dark backgrounds, indigo-to-violet accents, and frosted glass details.",
   "author":      "simulcast.stream",
   "author_url":  "https://simulcast.stream",

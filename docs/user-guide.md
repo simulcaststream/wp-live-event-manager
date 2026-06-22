@@ -108,7 +108,7 @@ Free events can issue access immediately after email validation (when configured
 
 ## Optional: Ably live chat
 
-On **Settings**, add an **Ably API key**. When set, watch flows can request short-lived Ably tokens for scoped chat channels. If Ably is not configured, chat UI stays hidden.
+On **Services → Chat**, configure the **Ably** provider and set your API key. Activate Ably as the chat provider. When configured, watch pages request short-lived Ably tokens for scoped chat channels. If chat is not configured, chat UI stays hidden.
 
 ## REST API
 
@@ -127,7 +127,8 @@ Base URL: `/wp-json/lem/v1/` (your site URL + REST prefix).
 | **Access Tokens** | JWT/session list, revoke, resend |
 | **Revoke access** | DB entitlement revocations |
 | **Payments** | Checkout records, CSV |
-| **Settings** | Stripe, Upstash, Ably, active provider, webhooks |
+| **Settings** | Upstash, active streaming/payment provider, device rules |
+| **Services** | Vendor credentials (Mux, OME, Stripe, PayPal, Ably chat) |
 | **Devices** | Device identification settings |
 | **Templates** | Template packs |
 | **User Guide** | This document (rendered from `docs/user-guide.md`) |

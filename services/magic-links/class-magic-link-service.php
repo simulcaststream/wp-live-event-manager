@@ -20,10 +20,17 @@ class LEM_Magic_Link_Service {
     public function send_magic_link_email($email, $jwt, $event_id, $session_id = null) {
         $event = $this->plugin->get_event_by_id($event_id);
         if (!$event) {
-            return false;
+            return array('sent' => false, 'error' => 'Event not found.');
         }
 
         $magic_token = $this->generate_magic_token($email, $event_id, $session_id);
+        if ($magic_token === false) {
+            return array(
+                'sent'  => false,
+                'error' => 'Magic links require Upstash Redis. Configure it under Live Events → Settings → Cache & Access.',
+            );
+        }
+
         $magic_link = $this->plugin->get_event_url($event_id, array('magic' => $magic_token));
 
         $unique_code = $this->extract_unique_code($jwt, $session_id);
@@ -83,7 +90,10 @@ class LEM_Magic_Link_Service {
         if (!empty($jwt)) {
             $parts = explode('.', $jwt);
             if (count($parts) === 3) {
-                $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
+                $segment = $parts[1];
+                $b64     = strtr($segment, '-_', '+/');
+                $pad     = (4 - (strlen($b64) % 4)) % 4;
+                $payload = json_decode(base64_decode($b64 . str_repeat('=', $pad), true), true);
                 if (!empty($payload['jti'])) {
                     return substr($payload['jti'], 0, 8);
                 }
@@ -98,23 +108,26 @@ class LEM_Magic_Link_Service {
     }
 
     public function generate_magic_token($email, $event_id, $session_id = null) {
-        $token = bin2hex(random_bytes(32));
+        $redis = $this->plugin->get_redis_connection();
+        if (! $redis) {
+            $this->plugin->debug_log('generate_magic_token: Redis unavailable — token not stored');
+            return false;
+        }
+
+        $token   = bin2hex(random_bytes(32));
         $expires = time() + (24 * 60 * 60);
 
         $magic_data = array(
-            'token' => $token,
-            'email' => $email,
-            'event_id' => $event_id,
+            'token'      => $token,
+            'email'      => $email,
+            'event_id'   => (string) $event_id,
             'session_id' => $session_id,
             'created_at' => time(),
             'expires_at' => $expires,
-            'consumed' => false
+            'consumed'   => false,
         );
 
-        $redis = $this->plugin->get_redis_connection();
-        if ($redis) {
-            $redis->setex('magic_token:' . $token, 24 * 60 * 60, json_encode($magic_data));
-        }
+        $redis->setex('magic_token:' . $token, 24 * 60 * 60, json_encode($magic_data));
 
         return $token;
     }
@@ -160,13 +173,15 @@ class LEM_Magic_Link_Service {
             return array('valid' => false, 'error' => 'Magic token expired');
         }
 
-        // Atomic consume: SETNX on a lock key so only one request wins.
+        // Atomic consume: single SET NX EX so the lock is created with its TTL in one
+        // round-trip. The old SETNX + SETEX pattern had a window where the key could
+        // exist without a TTL if the process crashed between the two calls, making the
+        // token permanently unusable without manual intervention.
         $lock_key   = 'magic_lock:' . $token;
-        $lock_taken = $redis->setnx($lock_key, '1');
+        $lock_taken = $redis->set_nx_ex($lock_key, '1', 300);
         if (!$lock_taken) {
             return array('valid' => false, 'error' => 'Magic token already used');
         }
-        $redis->setex($lock_key, 300, '1');
 
         if (class_exists('LEM_Access') && LEM_Access::is_email_revoked_for_event($magic_data['email'], $magic_data['event_id'])) {
             return array('valid' => false, 'error' => 'Access for this email has been revoked for this event.');
@@ -197,24 +212,46 @@ class LEM_Magic_Link_Service {
     }
 
     private function resolve_jti_for_magic_token($magic_data, $redis) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'lem_jwt_tokens';
+        $now        = date('Y-m-d H:i:s', time());
+
+        // Try the JTI stored in the original session first — but VERIFY it is still
+        // active in MySQL. If the token was revoked after the magic link was sent
+        // (e.g. a second webhook attempt called invalidate_existing_tokens before
+        // failing), fall through to the general MySQL lookup.
         if (!empty($magic_data['session_id'])) {
             $original_session_data = $redis->get('session:' . $magic_data['session_id']);
             if ($original_session_data) {
                 $original_session = json_decode($original_session_data, true);
                 if ($original_session && isset($original_session['jti'])) {
-                    $this->plugin->debug_log('Using original JTI from session', array('jti' => $original_session['jti']));
-                    return $original_session['jti'];
+                    $candidate_jti = $original_session['jti'];
+                    $still_active  = $wpdb->get_var($wpdb->prepare(
+                        "SELECT jti FROM {$table_name}
+                         WHERE jti = %s AND revoked_at IS NULL AND expires_at > %s
+                         LIMIT 1",
+                        $candidate_jti,
+                        $now
+                    ));
+                    if ($still_active) {
+                        $this->plugin->debug_log('Using original JTI from session (verified active)', array('jti' => $candidate_jti));
+                        return $candidate_jti;
+                    }
+                    $this->plugin->debug_log('Session JTI is revoked or expired — falling through to DB lookup', array('jti' => $candidate_jti));
                 }
             }
         }
 
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'lem_jwt_tokens';
         $jwt_record = $wpdb->get_row($wpdb->prepare(
-            "SELECT jti FROM {$table_name} WHERE email = %s AND event_id = %s AND revoked_at IS NULL AND expires_at > %s ORDER BY created_at DESC LIMIT 1",
+            "SELECT jti FROM {$table_name}
+             WHERE email    = %s
+               AND event_id = %s
+               AND revoked_at IS NULL
+               AND expires_at > %s
+             ORDER BY created_at DESC LIMIT 1",
             $magic_data['email'],
             $magic_data['event_id'],
-            date('Y-m-d H:i:s', time())
+            $now
         ));
 
         if ($jwt_record) {
@@ -251,79 +288,208 @@ class LEM_Magic_Link_Service {
     }
 
     public function validate_email_and_send_link($email, $event_id) {
+        $email    = $this->normalize_resend_email($email);
+        $event_id = $this->normalize_event_id($event_id);
+
+        if ($event_id === '0' || ! is_email($email)) {
+            return array('valid' => false, 'error' => 'A valid email and event are required.');
+        }
+
         if (class_exists('LEM_Access') && LEM_Access::is_email_revoked_for_event($email, $event_id)) {
             return array('valid' => false, 'error' => 'Access for this email has been revoked for this event.');
         }
 
-        if (!$this->has_valid_ticket($email, $event_id)) {
-            return array('valid' => false, 'error' => 'No valid ticket found for this email and event');
+        if (! $this->has_entitlement_for_resend($email, $event_id)) {
+            return array(
+                'valid' => false,
+                'error' => 'No ticket found for this email and event. Use the same email you used at checkout or when joining.',
+            );
         }
 
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'lem_jwt_tokens';
-        $jwt_record = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table_name} WHERE email = %s AND event_id = %s AND revoked_at IS NULL AND expires_at > %s ORDER BY created_at DESC LIMIT 1",
-            $email,
-            $event_id,
-            date('Y-m-d H:i:s', time())
-        ));
-
-        if (!$jwt_record) {
-            return array('valid' => false, 'error' => 'No valid JWT record found');
+        $jwt_token = $this->resolve_jwt_for_resend($email, $event_id);
+        if ($jwt_token === '') {
+            $detail = '';
+            if (property_exists($this->plugin, 'last_jwt_error') && ! empty($this->plugin->last_jwt_error)) {
+                $detail = ' ' . $this->plugin->last_jwt_error;
+            }
+            return array(
+                'valid' => false,
+                'error' => 'Could not issue a new playback token.' . $detail,
+            );
         }
 
         $new_session_id = $this->plugin->create_session($event_id, $email);
-        $result = $this->send_magic_link_email($email, $jwt_record->jwt_token, $event_id, $new_session_id);
+        $result         = $this->send_magic_link_email($email, $jwt_token, $event_id, $new_session_id);
 
-        $mail_ok = is_array($result) && !empty($result['sent']);
+        $mail_ok = is_array($result) && ! empty($result['sent']);
         if ($mail_ok) {
             return array('valid' => true, 'message' => 'New access link sent to your email');
         }
-        $err = (is_array($result) && !empty($result['error'])) ? $result['error'] : 'Failed to send access link';
+        $err = (is_array($result) && ! empty($result['error'])) ? $result['error'] : 'Failed to send access link';
         return array('valid' => false, 'error' => $err);
     }
 
+    /**
+     * True when the viewer may request a magic link (active JWT, expired ticket, golden email list, or Redis playback).
+     */
+    public function has_entitlement_for_resend($email, $event_id) {
+        if ($this->has_valid_ticket($email, $event_id)) {
+            return true;
+        }
+
+        if ($this->is_email_on_event_allowlist($email, $event_id)) {
+            return true;
+        }
+
+        if ($this->get_latest_token_row($email, $event_id, false) !== null) {
+            return true;
+        }
+
+        if ($this->has_playback_blob($email, $event_id)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Active (non-expired) JWT for watch/resend, or freshly generated when entitlement exists but JWT lapsed.
+     */
+    private function resolve_jwt_for_resend($email, $event_id) {
+        $active = $this->get_latest_token_row($email, $event_id, true);
+        if ($active && ! empty($active->jwt_token)) {
+            return $active->jwt_token;
+        }
+
+        $latest     = $this->get_latest_token_row($email, $event_id, false);
+        $payment_id = ($latest && ! empty($latest->payment_id)) ? $latest->payment_id : null;
+
+        $jwt_result = $this->plugin->generate_jwt($email, $event_id, $payment_id, true);
+        if ($jwt_result && is_array($jwt_result) && ! empty($jwt_result['jwt'])) {
+            return $jwt_result['jwt'];
+        }
+
+        return '';
+    }
+
+    private function normalize_resend_email($email) {
+        return strtolower(sanitize_email($email));
+    }
+
+    private function normalize_event_id($event_id) {
+        return (string) max(0, intval($event_id));
+    }
+
+    private function is_email_on_event_allowlist($email, $event_id) {
+        $event_emails = get_post_meta((int) $event_id, '_lem_event_emails', true);
+        if (! is_array($event_emails)) {
+            return false;
+        }
+        return in_array($this->normalize_resend_email($email), $event_emails, true);
+    }
+
+    private function has_playback_blob($email, $event_id) {
+        if (! class_exists('LEM_Access')) {
+            return false;
+        }
+        $redis = $this->plugin->get_redis_connection();
+        if (! $redis) {
+            return false;
+        }
+        return (bool) $redis->get(LEM_Access::playback_key($email, $event_id));
+    }
+
+    /**
+     * @param bool $active_only When true, only rows with expires_at in the future.
+     * @return object|null
+     */
+    private function get_latest_token_row($email, $event_id, $active_only) {
+        global $wpdb;
+        $table_name   = $wpdb->prefix . 'lem_jwt_tokens';
+        $email        = $this->normalize_resend_email($email);
+        $event_id_int = (int) $this->normalize_event_id($event_id);
+
+        if ($event_id_int <= 0 || ! is_email($email)) {
+            return null;
+        }
+
+        $expires_sql = $active_only ? ' AND expires_at > %s' : '';
+        $prepare_args  = array($email, $event_id_int);
+        if ($active_only) {
+            $prepare_args[] = date('Y-m-d H:i:s', time());
+        }
+
+        return $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table_name}
+             WHERE LOWER(email) = %s
+               AND CAST(event_id AS UNSIGNED) = %d
+               AND revoked_at IS NULL
+               {$expires_sql}
+             ORDER BY created_at DESC
+             LIMIT 1",
+            ...$prepare_args
+        ));
+    }
+
     public function has_valid_ticket($email, $event_id) {
+        $email        = $this->normalize_resend_email($email);
+        $event_id_int = (int) $this->normalize_event_id($event_id);
+
+        if ($event_id_int <= 0 || ! is_email($email)) {
+            return false;
+        }
+
         global $wpdb;
         $table_name = $wpdb->prefix . 'lem_jwt_tokens';
+        $now        = date('Y-m-d H:i:s', time());
 
         $result = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table_name} WHERE email = %s AND event_id = %s AND payment_id IS NOT NULL AND revoked_at IS NULL AND expires_at > %s",
+            "SELECT * FROM {$table_name}
+             WHERE LOWER(email) = %s
+               AND CAST(event_id AS UNSIGNED) = %d
+               AND payment_id IS NOT NULL AND payment_id != ''
+               AND revoked_at IS NULL
+               AND expires_at > %s",
             $email,
-            $event_id,
-            date('Y-m-d H:i:s', time())
+            $event_id_int,
+            $now
         ));
 
         if ($result) {
             $this->plugin->debug_log('Valid paid ticket found', array(
-                'email' => $email,
-                'event_id' => $event_id,
+                'email'      => $email,
+                'event_id'   => $event_id_int,
                 'payment_id' => $result->payment_id,
-                'jti' => $result->jti
+                'jti'        => $result->jti,
             ));
+            $this->cache_session_status((string) $event_id_int, $email, true);
             return true;
         }
 
         $free_result = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table_name} WHERE email = %s AND event_id = %s AND revoked_at IS NULL AND expires_at > %s",
+            "SELECT * FROM {$table_name}
+             WHERE LOWER(email) = %s
+               AND CAST(event_id AS UNSIGNED) = %d
+               AND revoked_at IS NULL
+               AND expires_at > %s",
             $email,
-            $event_id,
-            date('Y-m-d H:i:s', time())
+            $event_id_int,
+            $now
         ));
 
         if ($free_result) {
             $this->plugin->debug_log('Valid free ticket found', array(
-                'email' => $email,
-                'event_id' => $event_id,
+                'email'      => $email,
+                'event_id'   => $event_id_int,
                 'payment_id' => $free_result->payment_id,
-                'jti' => $free_result->jti
+                'jti'        => $free_result->jti,
             ));
-            $this->cache_session_status($event_id, $email, true);
+            $this->cache_session_status((string) $event_id_int, $email, true);
             return true;
         }
 
-        $this->plugin->debug_log('No valid ticket found', array('email' => $email, 'event_id' => $event_id));
-        $this->cache_session_status($event_id, $email, false);
+        $this->plugin->debug_log('No valid ticket found', array('email' => $email, 'event_id' => $event_id_int));
+        $this->cache_session_status((string) $event_id_int, $email, false);
         return false;
     }
 
@@ -333,7 +499,7 @@ class LEM_Magic_Link_Service {
             return;
         }
 
-        $email_hash = hash('sha256', $email);
+        $email_hash = hash('sha256', strtolower(trim($email)));
         $key = 'session_status:' . $event_id . ':' . $email_hash;
         $redis->setex($key, 5 * 60, json_encode(array(
             'valid' => (bool) $valid,

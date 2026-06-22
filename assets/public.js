@@ -98,6 +98,98 @@ jQuery(document).ready(function($) {
             e.preventDefault();
         }
     });
+
+    // Magic link resend (Already Purchased tab + watch-page resend forms).
+    $(document).on('submit', '.lem-resend-form', function(e) {
+        e.preventDefault();
+
+        var $form    = $(this);
+        var eventId  = $form.data('event-id') || $form.find('[name="lem_event_id"]').val();
+        var email    = $.trim($form.find('.lem-resend-email, input[name="email"]').first().val());
+        var $msg     = $form.find('.lem-resend-message').first();
+        var $btn     = $form.find('button[type="submit"]');
+
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            if ($msg.length) {
+                $msg.removeClass('lem-message-success').addClass('lem-message-error')
+                    .text('Please enter a valid email address.').show();
+            } else {
+                showMessage('Please enter a valid email address.', 'error', true);
+            }
+            return;
+        }
+
+        if (typeof lem_ajax === 'undefined') {
+            $form.off('submit').trigger('submit');
+            return;
+        }
+
+        $btn.prop('disabled', true);
+        $form.find('.lem-button-text').hide();
+        $form.find('.lem-button-loading').show();
+        if ($msg.length) {
+            $msg.hide().removeClass('lem-message-success lem-message-error');
+        }
+
+        $.post(lem_ajax.ajax_url, {
+            action: 'lem_validate_email',
+            email: email,
+            event_id: eventId,
+            nonce: lem_ajax.nonce
+        }).done(function(r) {
+            var text = (r && r.success)
+                ? (r.data || 'Check your email for your magic link.')
+                : (r && r.data ? (r.data.message || r.data) : 'Unable to send a magic link. Try again.');
+            var type = (r && r.success) ? 'success' : 'error';
+
+            if ($msg.length) {
+                $msg.removeClass('lem-message-success lem-message-error')
+                    .addClass(type === 'success' ? 'lem-message-success' : 'lem-message-error')
+                    .text(text).show();
+            } else {
+                showMessage(text, type, true);
+            }
+
+            if (r && r.success) {
+                $form.find('.lem-resend-email, input[name="email"]').val('');
+                var $block = $form.closest('.lem-event-ticket-block');
+                if ($block.length) {
+                    var resendTab = 'resend-' + eventId;
+                    $block.find('.lem-tab-btn').each(function() {
+                        var $tabBtn = $(this);
+                        if ($tabBtn.data('tab') === resendTab) {
+                            $tabBtn.trigger('click');
+                        }
+                    });
+                }
+            }
+        }).fail(function() {
+            var errText = 'Network error. Please try again.';
+            if ($msg.length) {
+                $msg.removeClass('lem-message-success').addClass('lem-message-error').text(errText).show();
+            } else {
+                showMessage(errText, 'error', true);
+            }
+        }).always(function() {
+            $btn.prop('disabled', false);
+            $form.find('.lem-button-loading').hide();
+            $form.find('.lem-button-text').show();
+        });
+    });
+
+    // Open resend tab after a classic POST resend (?lem_resend=1).
+    if (window.location.search.indexOf('lem_resend=1') !== -1) {
+        $('.lem-event-ticket-block').each(function() {
+            var eventId = $(this).data('event-id');
+            if (!eventId) {
+                return;
+            }
+            var $resendBtn = $(this).find('.lem-tab-btn[data-tab="resend-' + eventId + '"]');
+            if ($resendBtn.length) {
+                $resendBtn.trigger('click');
+            }
+        });
+    }
     
     // ============================================
     // Dark Theme Event Page Interactions
@@ -226,6 +318,42 @@ jQuery(document).ready(function($) {
                 $msgs.scrollTop($msgs[0].scrollHeight);
             }
         }
+    }
+
+    // PayPal return (or other flows): reconcile payment via API when webhooks are delayed.
+    if (window.lemPaymentReconcile && window.lemPaymentReconcile.session_id) {
+        var recon = window.lemPaymentReconcile;
+        var reconAttempts = 0;
+        var reconMax = 12;
+        var reconAjax = (typeof lem_ajax !== 'undefined') ? lem_ajax : null;
+
+        function pollPaymentReconcile() {
+            if (!reconAjax || reconAttempts >= reconMax) {
+                return;
+            }
+            reconAttempts++;
+            $.post(reconAjax.ajax_url, {
+                action: 'lem_reconcile_payment',
+                nonce: reconAjax.nonce,
+                session_id: recon.session_id,
+                provider_id: recon.provider_id || '',
+                event_id: recon.event_id || ''
+            }).done(function(r) {
+                if (r && r.success && r.data && r.data.granted) {
+                    if (r.data.watch_url) {
+                        window.location.href = r.data.watch_url;
+                    } else {
+                        window.location.reload();
+                    }
+                    return;
+                }
+                setTimeout(pollPaymentReconcile, 2000);
+            }).fail(function() {
+                setTimeout(pollPaymentReconcile, 3000);
+            });
+        }
+
+        setTimeout(pollPaymentReconcile, 1000);
     }
 
     // Boot Ably chat after everything is ready

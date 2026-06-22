@@ -22,16 +22,17 @@ The plugin combines Stripe for checkout, pluggable streaming backends (**Mux** o
 ## Requirements
 
 - WordPress 5.0+, PHP 7.4+, MySQL 5.7+
-- Stripe account with price IDs for paid events
+- **[LEM Adaptors](https://github.com/simulcaststream/wp-lem-adaptors)** (or your own provider plugin) for Mux, OME, Stripe, and/or PayPal
+- Stripe account with price IDs for paid events (when using Stripe)
 - **Upstash Redis** – REST URL and token ([Upstash](https://upstash.com)) for production session/token behavior
 - Streaming credentials for your chosen provider (**Mux** and/or **OME** as configured under **Vendors**)
-- Optional: **Ably** account for live chat
+- Optional: **Ably** account for live chat (configure under **Live Events → Services → Chat**)
 
 ## Setup
 
-1. **Install and activate** the plugin.
-2. Open **Live Events → Settings** and configure **Upstash Redis** (required for full access flows), **Stripe**, optional **Ably**, and the **active streaming provider**.
-3. Open **Live Events → Vendors** and enter credentials for **Mux** and/or **OME** (the active provider in Settings determines which path events use by default).
+1. **Install and activate** Live Event Manager and **LEM Adaptors**.
+2. Open **Live Events → Settings** and configure **Upstash Redis** (required for full access flows), optional **Ably**, and the **active streaming/payment provider**.
+3. Open **Live Events → Vendors** and enter credentials for **Mux** and/or **OME**, **Stripe** and/or **PayPal** (the active provider in Settings determines which path events use by default).
 4. Create a **Live Event** (`lem_event`): attach stream/playback details, set free vs paid and Stripe price if needed, then publish.
 5. Test entitlement: free events can issue access immediately; paid events go through Stripe Checkout; on success the webhook emails a magic link.
 

@@ -1,661 +1,461 @@
-<?php if (!defined('ABSPATH')) exit; ?>
-<div class="wrap">
-    <h1>Debug</h1>
-    
-    <div class="lem-admin-container">
-        <!-- Redis Connection Test -->
-        <div class="lem-section">
-            <h2>Redis Connection Test</h2>
-            <div class="lem-card">
-                <p>Test your Redis connection and basic operations:</p>
-                <button id="lem-test-redis" class="button button-primary">Test Redis Connection</button>
-                <div id="lem-redis-result" class="lem-result"></div>
-                
-                <div class="lem-instructions">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                        <h3>Redis Troubleshooting Guide</h3>
-                        <div>
-                            <button id="lem-expand-all" class="button button-secondary" style="margin-right: 10px;">Expand All</button>
-                            <button id="lem-collapse-all" class="button button-secondary">Collapse All</button>
-                        </div>
-                    </div>
-                    
-                    <!-- Local Development Section -->
-                    <div class="lem-collapsible-section">
-                        <div class="lem-collapsible-header" data-target="local-dev">
-                            <h4>🔧 Local Development (macOS/Linux)</h4>
-                            <span class="lem-toggle-icon">▼</span>
-                        </div>
-                        <div class="lem-collapsible-content" id="local-dev">
-                            <div class="lem-code-block">
-                                <h5>0. Install Redis (if not installed):</h5>
-                                <code>brew install redis</code>
-                                <p><em>For Ubuntu/Debian: sudo apt-get install redis-server</em></p>
-                                
-                                <h5>1. Check if Redis is installed:</h5>
-                                <code>redis-cli --version</code>
-                                
-                                <h5>2. Check if Redis is running:</h5>
-                                <code>redis-cli ping</code>
-                                <p><em>Should return: PONG</em></p>
-                                
-                                <h5>3. Start Redis (if not running):</h5>
-                                <code>brew services start redis</code>
-                                <p><em>Or manually: redis-server</em></p>
-                                
-                                <h5>4. Check Redis status:</h5>
-                                <code>brew services list | grep redis</code>
-                                <p><em>Should show: redis started</em></p>
-                                
-                                <h5>5. Test Redis connection:</h5>
-                                <code>redis-cli</code>
-                                <p><em>Then type: ping</em></p>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Server/Production Section -->
-                    <div class="lem-collapsible-section">
-                        <div class="lem-collapsible-header" data-target="server-prod">
-                            <h4>🌐 Server/Production</h4>
-                            <span class="lem-toggle-icon">▼</span>
-                        </div>
-                        <div class="lem-collapsible-content" id="server-prod">
-                            <div class="lem-code-block">
-                                <h5>1. Check Redis service status:</h5>
-                                <code>sudo systemctl status redis</code>
-                                <p><em>Or: sudo service redis status</em></p>
-                                
-                                <h5>2. Start Redis service:</h5>
-                                <code>sudo systemctl start redis</code>
-                                <p><em>Or: sudo service redis start</em></p>
-                                
-                                <h5>3. Enable Redis on boot:</h5>
-                                <code>sudo systemctl enable redis</code>
-                                
-                                <h5>4. Check Redis configuration:</h5>
-                                <code>sudo cat /etc/redis/redis.conf | grep -E "^(bind|port|requirepass)"</code>
-                                
-                                <h5>5. Test Redis connection:</h5>
-                                <code>redis-cli -h localhost -p 6379 ping</code>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Common Issues Section -->
-                    <div class="lem-collapsible-section">
-                        <div class="lem-collapsible-header" data-target="common-issues">
-                            <h4>🔍 Common Issues & Solutions</h4>
-                            <span class="lem-toggle-icon">▼</span>
-                        </div>
-                        <div class="lem-collapsible-content" id="common-issues">
-                            <div class="lem-troubleshooting">
-                                <div class="lem-issue">
-                                    <strong>❌ Connection refused</strong>
-                                    <p>Redis server is not running. Start it with the commands above.</p>
-                                </div>
-                                
-                                <div class="lem-issue">
-                                    <strong>❌ Authentication required</strong>
-                                    <p>Redis has a password. Check your Redis configuration and update the plugin settings.</p>
-                                </div>
-                                
-                                <div class="lem-issue">
-                                    <strong>❌ Wrong port</strong>
-                                    <p>Redis might be running on a different port. Check with: <code>redis-cli -p 6380 ping</code></p>
-                                </div>
-                                
-                                <div class="lem-issue">
-                                    <strong>❌ Firewall blocking</strong>
-                                    <p>Check if port 6379 is open: <code>sudo ufw status</code></p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Plugin Configuration Section -->
-                    <div class="lem-collapsible-section">
-                        <div class="lem-collapsible-header" data-target="plugin-config">
-                            <h4>⚙️ Plugin Configuration</h4>
-                            <span class="lem-toggle-icon">▼</span>
-                        </div>
-                        <div class="lem-collapsible-content" id="plugin-config">
-                            <p>Make sure your Redis settings are correct in the plugin configuration:</p>
-                            <ul>
-                                <li><strong>Host:</strong> Usually <code>localhost</code> or <code>127.0.0.1</code></li>
-                                <li><strong>Port:</strong> Usually <code>6379</code></li>
-                                <li><strong>Password:</strong> Leave empty if no password is set</li>
-                                <li><strong>Database:</strong> Usually <code>0</code> (plugin will auto-select if conflicts with WordPress cache)</li>
-                            </ul>
-                            
-                            <div class="lem-notice">
-                                <h5>🔄 Automatic Database Selection</h5>
-                                <p>The plugin automatically detects if database 0 is used by WordPress caching and selects the next available database to avoid conflicts.</p>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <h4>💳 Stripe Webhook Local Development</h4>
-                    <div class="lem-code-block">
-                        <h5>For local development with Stripe CLI:</h5>
-                        <p>When using Stripe CLI to forward webhooks to localhost, you need to skip SSL verification:</p>
-                        <code>stripe listen --forward-to https://localhost:8443/wp-admin/admin-ajax.php?action=lem_stripe_webhook --skip-verify</code>
-                        <p><em>Note: The --skip-verify flag is required for localhost SSL certificates.</em></p>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
+<?php
+if (!defined('ABSPATH')) exit;
 
-        
-        <!-- Clear All Tokens -->
-        <div class="lem-section">
-            <h2>Clear All Tokens & Sessions</h2>
-            <div class="lem-card">
-                <div class="lem-warning">
-                    <h3>⚠️ Warning: This action cannot be undone!</h3>
-                    <p>This will permanently delete:</p>
-                    <ul>
-                        <li>All JWT tokens from the database</li>
-                        <li>All active sessions from Redis</li>
-                        <li>All magic tokens from Redis</li>
-                        <li>All cached event data from Redis</li>
-                    </ul>
-                    <p><strong>All users will lose access and need to request new magic links.</strong></p>
-                </div>
-                <button id="lem-clear-tokens" class="button button-danger">Clear All Tokens & Sessions</button>
-                <div id="lem-clear-result" class="lem-result"></div>
-            </div>
-        </div>
-        
-        <!-- Debug Information -->
+$settings        = get_option('lem_settings', array());
+
+// ── Active providers ─────────────────────────────────────────────────────────
+$stream_factory  = LEM_Streaming_Provider_Factory::get_instance();
+$active_spid     = $settings['streaming_provider'] ?? 'mux';
+$active_sprov    = $stream_factory->get_provider($active_spid);
+
+$pay_factory     = LEM_Payment_Provider_Factory::get_instance();
+$active_ppid     = $settings['payment_provider'] ?? 'stripe';
+$active_pprov    = $pay_factory->get_provider($active_ppid);
+
+// ── URLs ─────────────────────────────────────────────────────────────────────
+$payment_webhook_url = admin_url('admin-ajax.php?action=lem_payment_webhook');
+$paypal_capture_url  = admin_url('admin-ajax.php?action=lem_paypal_capture');
+$settings_cache_url  = admin_url('edit.php?post_type=lem_event&page=live-event-manager-settings&tab=cache');
+$services_pay_url    = admin_url('edit.php?post_type=lem_event&page=live-event-manager-services&service=payments');
+?>
+<div class="wrap">
+    <h1>System Diagnostics</h1>
+    <?php require __DIR__ . '/admin-subnav.php'; ?>
+
+    <div class="lem-admin-container">
+
+        <!-- ── System Information ─────────────────────────────────────────── -->
         <div class="lem-section">
             <h2>System Information</h2>
             <div class="lem-card">
                 <table class="form-table">
                     <tr>
-                        <th>WordPress Version:</th>
-                        <td><?php echo get_bloginfo('version'); ?></td>
+                        <th>WordPress Version</th>
+                        <td><?php echo esc_html(get_bloginfo('version')); ?></td>
                     </tr>
                     <tr>
-                        <th>PHP Version:</th>
-                        <td><?php echo phpversion(); ?></td>
+                        <th>PHP Version</th>
+                        <td><?php echo esc_html(phpversion()); ?></td>
                     </tr>
                     <tr>
-                        <th>Plugin Version:</th>
-                        <td><?php echo LEM_VERSION; ?></td>
+                        <th>Plugin Version</th>
+                        <td><?php echo esc_html(LEM_VERSION); ?></td>
                     </tr>
                     <tr>
-                        <th>Debug Mode:</th>
-                        <td><?php echo WP_DEBUG ? 'Enabled' : 'Disabled'; ?></td>
+                        <th>Debug Mode</th>
+                        <td><?php echo WP_DEBUG ? '<span style="color:#46b450;">Enabled</span>' : 'Disabled'; ?></td>
                     </tr>
                     <tr>
-                        <th>Database Prefix:</th>
-                        <td><?php global $wpdb; echo $wpdb->prefix; ?></td>
+                        <th>Database Prefix</th>
+                        <td><?php global $wpdb; echo esc_html($wpdb->prefix); ?></td>
                     </tr>
                     <tr>
-                        <th>JWT Table:</th>
-                        <td><?php global $wpdb; echo $wpdb->prefix . 'lem_jwt_tokens'; ?></td>
+                        <th>JWT Table</th>
+                        <td><?php global $wpdb; echo esc_html($wpdb->prefix . 'lem_jwt_tokens'); ?></td>
                     </tr>
                 </table>
             </div>
         </div>
+
+        <!-- ── Provider Status ────────────────────────────────────────────── -->
+        <div class="lem-section">
+            <h2>Provider Status</h2>
+            <div class="lem-card">
+                <table class="form-table">
+                    <tr>
+                        <th>Streaming Provider</th>
+                        <td>
+                            <strong><?php echo esc_html($active_sprov ? $active_sprov->get_name() : $active_spid); ?></strong>
+                            &nbsp;
+                            <?php if ($active_sprov && $active_sprov->is_configured()): ?>
+                                <span style="color:#46b450;">&#10003; Configured</span>
+                            <?php else: ?>
+                                <span style="color:#d63638;">&#10007; Not configured</span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Payment Provider</th>
+                        <td>
+                            <strong><?php echo esc_html($active_pprov ? $active_pprov->get_name() : $active_ppid); ?></strong>
+                            &nbsp;
+                            <?php if ($active_pprov && $active_pprov->is_configured()): ?>
+                                <span style="color:#46b450;">&#10003; Configured</span>
+                            <?php else: ?>
+                                <span style="color:#d63638;">&#10007; Not configured
+                                    — <a href="<?php echo esc_url($services_pay_url); ?>">Add credentials</a>
+                                </span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Upstash Cache</th>
+                        <td>
+                            <?php if (class_exists('LEM_Cache') && LEM_Cache::is_configured()): ?>
+                                <span style="color:#46b450;">&#10003; Configured</span>
+                            <?php else: ?>
+                                <span style="color:#d63638;">&#10007; Not configured
+                                    — <a href="<?php echo esc_url($settings_cache_url); ?>">Add credentials</a>
+                                </span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- ── Webhook URLs ───────────────────────────────────────────────── -->
+        <div class="lem-section">
+            <h2>Webhook URLs</h2>
+            <div class="lem-card">
+                <table class="form-table">
+                    <tr>
+                        <th>Payment Webhook</th>
+                        <td>
+                            <code><?php echo esc_url($payment_webhook_url); ?></code>
+                            <p class="description">
+                                Register this single URL in every payment provider's dashboard.
+                                The plugin routes to the active provider automatically.<br>
+                                Stripe: subscribe to <code>checkout.session.completed</code> &nbsp;|&nbsp;
+                                PayPal: subscribe to <code>PAYMENT.CAPTURE.COMPLETED</code>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>PayPal Capture URL</th>
+                        <td>
+                            <code><?php echo esc_url($paypal_capture_url); ?></code>
+                            <p class="description">Set automatically by the plugin when creating a PayPal order. Not needed in PayPal's dashboard.</p>
+                        </td>
+                    </tr>
+                </table>
+
+                <div class="lem-code-block" style="margin-top:16px;">
+                    <h5>Testing payment webhooks locally (Stripe CLI):</h5>
+                    <code>stripe listen --forward-to "<?php echo esc_attr($payment_webhook_url); ?>" --skip-verify</code>
+                    <p><em>The <code>--skip-verify</code> flag is required for local SSL certificates.</em></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Webhook Activity Log ───────────────────────────────────────── -->
+        <div class="lem-section">
+            <h2>Recent Webhook Activity</h2>
+            <div class="lem-card">
+                <p style="margin-top:0;">Live record of every inbound payment webhook. Use this to verify Stripe / PayPal are reaching the endpoint, and to see why a webhook didn't issue a JWT.</p>
+
+                <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+                    <button id="lem-refresh-webhook-log" class="button">Refresh</button>
+                    <label style="margin-left:8px;font-size:13px;"><input type="checkbox" id="lem-webhook-log-auto" checked> Auto-refresh (5s)</label>
+                    <button id="lem-clear-webhook-log" class="button" style="margin-left:auto;color:#a00;">Clear log</button>
+                </div>
+
+                <div id="lem-webhook-log-wrap">
+                    <p id="lem-webhook-log-empty">Loading…</p>
+                    <table id="lem-webhook-log-table" class="wp-list-table widefat fixed striped" style="display:none;">
+                        <thead>
+                            <tr>
+                                <th style="width:140px;">Time</th>
+                                <th style="width:80px;">Provider</th>
+                                <th style="width:120px;">Status</th>
+                                <th style="width:160px;">Event Type</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lem-webhook-log-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Upstash Cache Test ─────────────────────────────────────────── -->
+        <div class="lem-section">
+            <h2>Upstash Cache Test</h2>
+            <div class="lem-card">
+                <p>
+                    This plugin uses <strong>Upstash Redis</strong> over HTTPS — no local Redis server or PHP extension required.
+                    Credentials are set on the <a href="<?php echo esc_url($settings_cache_url); ?>">Settings → Cache &amp; Access</a> tab.
+                </p>
+                <button id="lem-test-redis" class="button button-primary">Test Upstash Connection</button>
+                <div id="lem-redis-result" class="lem-result"></div>
+
+                <div class="lem-instructions" style="margin-top:24px;">
+                    <h3>Upstash Troubleshooting</h3>
+
+                    <div class="lem-collapsible-section">
+                        <div class="lem-collapsible-header" data-target="upstash-setup">
+                            <h4>Getting Upstash credentials</h4>
+                            <span class="lem-toggle-icon">&#9654;</span>
+                        </div>
+                        <div class="lem-collapsible-content collapsed" id="upstash-setup">
+                            <div class="lem-code-block">
+                                <ol>
+                                    <li>Create a free account at <a href="https://upstash.com" target="_blank">upstash.com</a></li>
+                                    <li>Click <strong>Create Database</strong> → choose a region close to your server</li>
+                                    <li>Open the database → go to the <strong>REST API</strong> tab</li>
+                                    <li>Copy the <strong>UPSTASH_REDIS_REST_URL</strong> and <strong>UPSTASH_REDIS_REST_TOKEN</strong></li>
+                                    <li>Paste both into <a href="<?php echo esc_url($settings_cache_url); ?>">Settings → Cache &amp; Access</a></li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="lem-collapsible-section">
+                        <div class="lem-collapsible-header" data-target="upstash-errors">
+                            <h4>Common errors</h4>
+                            <span class="lem-toggle-icon">&#9654;</span>
+                        </div>
+                        <div class="lem-collapsible-content collapsed" id="upstash-errors">
+                            <div class="lem-troubleshooting">
+                                <div class="lem-issue">
+                                    <strong>REST URL and token are required</strong>
+                                    <p>No credentials saved yet. Go to <a href="<?php echo esc_url($settings_cache_url); ?>">Settings → Cache &amp; Access</a> and enter them.</p>
+                                </div>
+                                <div class="lem-issue">
+                                    <strong>Upstash SET failed / 401 Unauthorized</strong>
+                                    <p>The token is wrong or has been revoked. Regenerate it in the Upstash dashboard under REST API.</p>
+                                </div>
+                                <div class="lem-issue">
+                                    <strong>GET returned unexpected value</strong>
+                                    <p>Data roundtrip mismatch — usually a transient network issue. Try the test again. If it persists, check that the database region is accessible from your server.</p>
+                                </div>
+                                <div class="lem-issue">
+                                    <strong>cURL error / timeout</strong>
+                                    <p>Your server cannot reach Upstash. Check outbound HTTPS (port 443) is allowed in your firewall or hosting control panel.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Clear All Tokens ───────────────────────────────────────────── -->
+        <div class="lem-section">
+            <h2>Clear All Tokens &amp; Sessions</h2>
+            <div class="lem-card">
+                <div class="lem-warning">
+                    <h3>&#9888; Warning: This action cannot be undone!</h3>
+                    <p>This will permanently delete:</p>
+                    <ul>
+                        <li>All JWT tokens from the database</li>
+                        <li>All active sessions from Upstash</li>
+                        <li>All magic tokens from Upstash</li>
+                        <li>All cached event data from Upstash</li>
+                    </ul>
+                    <p><strong>All users will lose access and need to request new magic links.</strong></p>
+                </div>
+                <button id="lem-clear-tokens" class="button button-danger">Clear All Tokens &amp; Sessions</button>
+                <div id="lem-clear-result" class="lem-result"></div>
+            </div>
+        </div>
+
     </div>
 </div>
 
 <style>
-.lem-result {
-    margin-top: 15px;
-    padding: 15px;
-    border-radius: 8px;
-    display: none;
-}
+.lem-result { margin-top:15px; padding:15px; border-radius:8px; display:none; }
+.lem-result.success { background:#d4edda; color:#155724; border:1px solid #c3e6cb; display:block; }
+.lem-result.error   { background:#f8d7da; color:#721c24; border:1px solid #f5c6cb; display:block; }
+.lem-result.info    { background:#d1ecf1; color:#0c5460; border:1px solid #bee5eb; display:block; }
 
-.lem-result.success {
-    background: #d4edda;
-    color: #155724;
-    border: 1px solid #c3e6cb;
-    display: block;
-}
+.lem-instructions { margin-top:20px; padding:20px; background:#f8f9fa; border-radius:8px; border:1px solid #e9ecef; }
+.lem-instructions h3 { margin-top:0; color:#333; border-bottom:2px solid #007cba; padding-bottom:10px; }
 
-.lem-result.error {
-    background: #f8d7da;
-    color: #721c24;
-    border: 1px solid #f5c6cb;
-    display: block;
-}
+.lem-collapsible-section { margin-bottom:12px; border:1px solid #e9ecef; border-radius:6px; overflow:hidden; }
+.lem-collapsible-header  { background:#f8f9fa; padding:12px 16px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e9ecef; }
+.lem-collapsible-header:hover { background:#e9ecef; }
+.lem-collapsible-header h4 { margin:0; color:#007cba; font-size:1em; }
+.lem-toggle-icon { font-size:.8em; color:#666; }
 
-.lem-result.info {
-    background: #d1ecf1;
-    color: #0c5460;
-    border: 1px solid #bee5eb;
-    display: block;
-}
+.lem-collapsible-content { overflow:hidden; transition:max-height .3s ease, opacity .3s ease; background:#fff; max-height:800px; opacity:1; }
+.lem-collapsible-content.collapsed { max-height:0; opacity:0; }
+.lem-collapsible-content > * { padding:16px 20px; }
+.lem-collapsible-content ol { margin:0; padding-left:20px; }
+.lem-collapsible-content li { margin:6px 0; color:#555; }
 
-.lem-logs-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 15px;
-}
+.lem-code-block { background:#f1f3f4; padding:15px; border-radius:6px; margin:10px 0; border-left:4px solid #007cba; }
+.lem-code-block code { background:#e8eaed; padding:4px 8px; border-radius:4px; font-family:'Courier New',monospace; color:#d73a49; display:inline-block; margin:5px 0; word-break:break-all; }
+.lem-code-block p { margin:5px 0; color:#666; }
+.lem-code-block ol { margin:0; padding-left:20px; }
+.lem-code-block li { margin:6px 0; color:#555; }
 
-.lem-logs-table th,
-.lem-logs-table td {
-    padding: 8px;
-    text-align: left;
-    border-bottom: 1px solid #ddd;
-}
+.lem-troubleshooting { margin:12px 0; }
+.lem-issue { background:#fff3cd; border:1px solid #ffeaa7; padding:12px; border-radius:6px; margin:8px 0; }
+.lem-issue strong { color:#856404; display:block; margin-bottom:4px; }
+.lem-issue p { margin:4px 0; color:#856404; }
 
-.lem-logs-table th {
-    background-color: #f2f2f2;
-    font-weight: bold;
-}
+.lem-warning { background:#fff3cd; border:1px solid #ffeaa7; padding:15px; border-radius:6px; margin-bottom:20px; }
+.lem-warning h3 { color:#856404; margin-top:0; margin-bottom:8px; }
+.lem-warning p, .lem-warning li { color:#856404; margin:6px 0; }
+.lem-warning ul { margin:8px 0; padding-left:20px; }
 
-.lem-logs-table tr:hover {
-    background-color: #f5f5f5;
-}
+.button-danger { background:#dc3545 !important; border-color:#dc3545 !important; color:#fff !important; }
+.button-danger:hover { background:#c82333 !important; border-color:#bd2130 !important; }
 
-.lem-stats {
-    display: flex;
-    gap: 20px;
-    margin-bottom: 15px;
-}
-
-.lem-stat {
-    background: #f8f9fa;
-    padding: 10px 15px;
-    border-radius: 6px;
-    border: 1px solid #e9ecef;
-}
-
-.lem-stat .number {
-    font-size: 1.5em;
-    font-weight: bold;
-    color: #007cba;
-}
-
-.lem-stat .label {
-    font-size: 0.9em;
-    color: #666;
-}
-
-.lem-instructions {
-    margin-top: 30px;
-    padding: 20px;
-    background: #f8f9fa;
-    border-radius: 8px;
-    border: 1px solid #e9ecef;
-}
-
-.lem-instructions h3 {
-    margin-top: 0;
-    color: #333;
-    border-bottom: 2px solid #007cba;
-    padding-bottom: 10px;
-}
-
-.lem-instructions h4 {
-    color: #007cba;
-    margin-top: 25px;
-    margin-bottom: 15px;
-}
-
-.lem-instructions h5 {
-    color: #555;
-    margin-top: 15px;
-    margin-bottom: 8px;
-    font-size: 1em;
-}
-
-/* Collapsible Sections */
-.lem-collapsible-section {
-    margin-bottom: 15px;
-    border: 1px solid #e9ecef;
-    border-radius: 6px;
-    overflow: hidden;
-}
-
-.lem-collapsible-header {
-    background: #f8f9fa;
-    padding: 15px 20px;
-    cursor: pointer;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #e9ecef;
-    transition: background-color 0.2s ease;
-}
-
-.lem-collapsible-header:hover {
-    background: #e9ecef;
-}
-
-.lem-collapsible-header h4 {
-    margin: 0;
-    color: #007cba;
-    font-size: 1.1em;
-}
-
-.lem-toggle-icon {
-    font-size: 0.8em;
-    color: #666;
-    transition: transform 0.3s ease;
-}
-
-.lem-collapsible-header.collapsed .lem-toggle-icon {
-    transform: rotate(-90deg);
-}
-
-.lem-collapsible-content {
-    max-height: 1000px;
-    overflow: hidden;
-    transition: max-height 0.3s ease-in-out, opacity 0.3s ease-in-out;
-    background: white;
-    opacity: 1;
-}
-
-.lem-collapsible-content.collapsed {
-    max-height: 0;
-    opacity: 0;
-}
-
-.lem-collapsible-content > div {
-    padding: 20px;
-}
-
-/* Add some spacing between sections */
-.lem-instructions .lem-collapsible-section:not(:last-child) {
-    margin-bottom: 20px;
-}
-
-.lem-code-block {
-    background: #f1f3f4;
-    padding: 15px;
-    border-radius: 6px;
-    margin: 10px 0;
-    border-left: 4px solid #007cba;
-}
-
-.lem-code-block code {
-    background: #e8eaed;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-family: 'Courier New', monospace;
-    color: #d73a49;
-    display: inline-block;
-    margin: 5px 0;
-}
-
-.lem-code-block p {
-    margin: 5px 0;
-    color: #666;
-}
-
-.lem-troubleshooting {
-    margin: 15px 0;
-}
-
-.lem-issue {
-    background: #fff3cd;
-    border: 1px solid #ffeaa7;
-    padding: 12px;
-    border-radius: 6px;
-    margin: 10px 0;
-}
-
-.lem-issue strong {
-    color: #856404;
-    display: block;
-    margin-bottom: 5px;
-}
-
-.lem-warning {
-    background: #fff3cd;
-    border: 1px solid #ffeaa7;
-    padding: 15px;
-    border-radius: 6px;
-    margin-bottom: 20px;
-}
-
-.lem-warning h3 {
-    color: #856404;
-    margin-top: 0;
-    margin-bottom: 10px;
-}
-
-.lem-warning p {
-    color: #856404;
-    margin: 8px 0;
-}
-
-.lem-warning ul {
-    margin: 10px 0;
-    padding-left: 20px;
-}
-
-.lem-warning li {
-    color: #856404;
-    margin: 5px 0;
-}
-
-.button-danger {
-    background: #dc3545 !important;
-    border-color: #dc3545 !important;
-    color: white !important;
-}
-
-.button-danger:hover {
-    background: #c82333 !important;
-    border-color: #bd2130 !important;
-}
-
-.lem-issue p {
-    margin: 5px 0;
-    color: #856404;
-}
-
-.lem-instructions ul {
-    margin: 10px 0;
-    padding-left: 20px;
-}
-
-.lem-instructions li {
-    margin: 5px 0;
-    color: #555;
-}
-
-.lem-notice {
-    background: #e7f3ff;
-    border: 1px solid #b3d9ff;
-    padding: 15px;
-    border-radius: 6px;
-    margin: 15px 0;
-}
-
-.lem-notice h5 {
-    margin: 0 0 10px 0;
-    color: #0066cc;
-}
-
-.lem-notice p {
-    margin: 0;
-    color: #0066cc;
-}
+.lem-stats { display:flex; gap:20px; margin:12px 0; }
+.lem-stat { background:#f8f9fa; padding:10px 15px; border-radius:6px; border:1px solid #e9ecef; }
+.lem-stat .number { font-size:1.5em; font-weight:bold; color:#007cba; }
+.lem-stat .label  { font-size:.9em; color:#666; }
 </style>
 
 <script>
 jQuery(document).ready(function($) {
-    // HTML escape helper
-    function escHtml(s) { var d = document.createElement('div'); d.appendChild(document.createTextNode(s)); return d.innerHTML; }
-
-    // Ensure lem_ajax object is available
-    if (typeof lem_ajax === 'undefined') {
-        console.warn('lem_ajax object not found, creating fallback');
-        window.lem_ajax = {
-            ajax_url: <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>,
-            nonce: <?php echo wp_json_encode(wp_create_nonce('lem_nonce')); ?>
-        };
+    function escHtml(s) {
+        var d = document.createElement('div');
+        d.appendChild(document.createTextNode(String(s)));
+        return d.innerHTML;
     }
-    
-    // Collapsible sections functionality
+
+    // Collapsible sections
     $('.lem-collapsible-header').on('click', function() {
-        var $header = $(this);
-        var $content = $('#' + $header.data('target'));
-        var $icon = $header.find('.lem-toggle-icon');
-        
-        if ($content.hasClass('collapsed')) {
-            // Expand
-            $content.removeClass('collapsed');
-            $header.removeClass('collapsed');
-            $icon.text('▼');
-        } else {
-            // Collapse
-            $content.addClass('collapsed');
-            $header.addClass('collapsed');
-            $icon.text('▶');
-        }
+        var $content = $('#' + $(this).data('target'));
+        var $icon    = $(this).find('.lem-toggle-icon');
+        var collapsed = $content.hasClass('collapsed');
+        $content.toggleClass('collapsed', !collapsed);
+        $icon.html(collapsed ? '&#9660;' : '&#9654;');
     });
-    
-    // Initialize all sections as collapsed by default
-    $('.lem-collapsible-content').addClass('collapsed');
-    $('.lem-collapsible-header').addClass('collapsed');
-    $('.lem-collapsible-header .lem-toggle-icon').text('▶');
-    
-    // Expand all sections
-    $('#lem-expand-all').on('click', function() {
-        $('.lem-collapsible-content').removeClass('collapsed');
-        $('.lem-collapsible-header').removeClass('collapsed');
-        $('.lem-collapsible-header .lem-toggle-icon').text('▼');
-    });
-    
-    // Collapse all sections
-    $('#lem-collapse-all').on('click', function() {
-        $('.lem-collapsible-content').addClass('collapsed');
-        $('.lem-collapsible-header').addClass('collapsed');
-        $('.lem-collapsible-header .lem-toggle-icon').text('▶');
-    });
-    // Test Redis connection
+
+    // Test Upstash connection
     $('#lem-test-redis').on('click', function() {
-        var $button = $(this);
-        var $result = $('#lem-redis-result');
-        
-        $button.prop('disabled', true).text('Testing...');
-        $result.removeClass('success error info').hide();
-        
-        $.post(lem_ajax.ajax_url, {
-            action: 'lem_test_redis_connection',
-            nonce: lem_ajax.nonce
-        }, function(response) {
-            if (response.success) {
-                var html = '<h4>✅ ' + escHtml(response.data.message) + '</h4>';
-                html += '<table class="form-table">';
-                html += '<tr><th>Redis Version:</th><td>' + escHtml(response.data.redis_version) + '</td></tr>';
-                html += '<tr><th>Connected Clients:</th><td>' + escHtml(response.data.connected_clients) + '</td></tr>';
-                html += '<tr><th>Used Memory:</th><td>' + escHtml(response.data.used_memory_human) + '</td></tr>';
-                html += '<tr><th>Uptime:</th><td>' + Math.floor(response.data.uptime_in_seconds / 3600) + ' hours</td></tr>';
-                html += '<tr><th>Current Database:</th><td>' + escHtml(response.data.current_database) + '</td></tr>';
-                html += '<tr><th>Host:</th><td>' + escHtml(response.data.host) + '</td></tr>';
-                html += '<tr><th>Port:</th><td>' + escHtml(response.data.port) + '</td></tr>';
-                html += '</table>';
+        var $btn    = $(this).prop('disabled', true).text('Testing…');
+        var $result = $('#lem-redis-result').removeClass('success error info').hide();
 
-                $result.addClass('success').html(html).show();
+        $.post(lem_ajax.ajax_url, { action: 'lem_test_redis_connection', nonce: lem_ajax.nonce }, function(r) {
+            if (r.success) {
+                $result.addClass('success').html(
+                    '<h4>&#10003; ' + escHtml(r.data.message) + '</h4>' +
+                    '<p>Endpoint: <code>' + escHtml(r.data.url) + '</code></p>'
+                ).show();
             } else {
-                $result.addClass('error').html('<h4>❌ Redis Test Failed</h4><p>' + escHtml(response.data) + '</p>').show();
+                $result.addClass('error').html('<h4>&#10007; Test Failed</h4><p>' + escHtml(r.data) + '</p>').show();
             }
         }).fail(function() {
-            $result.addClass('error').html('<h4>❌ Network Error</h4><p>Failed to connect to server.</p>').show();
+            $result.addClass('error').html('<h4>&#10007; Network Error</h4><p>Could not reach the server.</p>').show();
         }).always(function() {
-            $button.prop('disabled', false).text('Test Redis Connection');
+            $btn.prop('disabled', false).text('Test Upstash Connection');
         });
     });
-    
-    // Check Redis status
-    $('#lem-check-redis-status').on('click', function() {
-        var $button = $(this);
-        var $result = $('#lem-redis-result');
-        
-        $button.prop('disabled', true).text('Checking...');
-        $result.removeClass('success error info').hide();
-        
-        // Check if Redis is enabled in settings
-        $.post(lem_ajax.ajax_url, {
-            action: 'lem_check_redis_status',
-            nonce: lem_ajax.nonce
-        }, function(response) {
-            if (response.success) {
-                var html = '<h4>🔍 Redis Status Check</h4>';
-                html += '<table class="form-table">';
-                html += '<tr><th>Redis Enabled:</th><td>' + (response.data.enabled ? '✅ Yes' : '❌ No') + '</td></tr>';
-                html += '<tr><th>Host:</th><td>' + escHtml(response.data.host) + '</td></tr>';
-                html += '<tr><th>Port:</th><td>' + escHtml(response.data.port) + '</td></tr>';
-                html += '<tr><th>Database:</th><td>' + escHtml(response.data.database) + '</td></tr>';
-                html += '<tr><th>Password Set:</th><td>' + (response.data.password_set ? 'Yes' : 'No') + '</td></tr>';
-                html += '</table>';
 
-                if (!response.data.enabled) {
-                    html += '<div class="notice notice-warning"><p><strong>Redis is disabled!</strong> Enable it in Live Events > Settings > Redis Configuration.</p></div>';
-                }
-
-                $result.addClass('info').html(html).show();
-            } else {
-                $result.addClass('error').html('<h4>❌ Status Check Failed</h4><p>' + escHtml(response.data) + '</p>').show();
-            }
-        }).fail(function() {
-            $result.addClass('error').html('<h4>❌ Network Error</h4><p>Failed to check Redis status.</p>').show();
-        }).always(function() {
-            $button.prop('disabled', false).text('Check Redis Status');
-        });
-    });
-    
-
-    
     // Clear all tokens
     $('#lem-clear-tokens').on('click', function() {
-        console.log('Clear tokens button clicked');
-        console.log('lem_ajax object:', typeof lem_ajax !== 'undefined' ? lem_ajax : 'undefined');
-        
-        if (!confirm('⚠️ WARNING: This will permanently delete ALL tokens and sessions!\n\nAll users will lose access and need to request new magic links.\n\nThis action cannot be undone!\n\nAre you sure you want to continue?')) {
+        if (!confirm('WARNING: This will permanently delete ALL tokens and sessions.\n\nAll users will lose access and need to request new magic links.\n\nThis action cannot be undone. Continue?')) {
             return;
         }
-        
-        var $button = $(this);
-        var $result = $('#lem-clear-result');
-        
-        $button.prop('disabled', true).text('Clearing...');
-        $result.removeClass('success error info').hide();
-        
-        console.log('Sending AJAX request to:', lem_ajax.ajax_url);
-        console.log('Request data:', {
-            action: 'lem_clear_all_tokens',
-            nonce: lem_ajax.nonce
-        });
-        
-        $.post(lem_ajax.ajax_url, {
-            action: 'lem_clear_all_tokens',
-            nonce: lem_ajax.nonce
-        }, function(response) {
-            console.log('AJAX response received:', response);
-            if (response.success) {
-                var html = '<h4>✅ All Tokens Cleared Successfully</h4>';
-                html += '<p>' + escHtml(response.data.message) + '</p>';
+        var $btn    = $(this).prop('disabled', true).text('Clearing…');
+        var $result = $('#lem-clear-result').removeClass('success error info').hide();
+
+        $.post(lem_ajax.ajax_url, { action: 'lem_clear_all_tokens', nonce: lem_ajax.nonce }, function(r) {
+            if (r.success) {
+                var html = '<h4>&#10003; All Tokens Cleared</h4><p>' + escHtml(r.data.message) + '</p>';
                 html += '<div class="lem-stats">';
-                html += '<div class="lem-stat"><span class="number">' + escHtml(String(response.data.results.mysql_deleted)) + '</span><div class="label">Database Records Deleted</div></div>';
-                html += '<div class="lem-stat"><span class="number">' + escHtml(String(response.data.results.redis_keys_deleted)) + '</span><div class="label">Redis Keys Deleted</div></div>';
+                html += '<div class="lem-stat"><span class="number">' + escHtml(r.data.results.mysql_deleted)    + '</span><div class="label">DB Records Deleted</div></div>';
+                html += '<div class="lem-stat"><span class="number">' + escHtml(r.data.results.redis_keys_deleted) + '</span><div class="label">Cache Keys Deleted</div></div>';
                 html += '</div>';
-
-                if (response.data.results.redis_error) {
-                    html += '<div class="notice notice-warning"><p><strong>Redis Warning:</strong> ' + escHtml(response.data.results.redis_error) + '</p></div>';
+                if (r.data.results.redis_error) {
+                    html += '<p style="color:#856404;"><strong>Cache warning:</strong> ' + escHtml(r.data.results.redis_error) + '</p>';
                 }
-
                 $result.addClass('success').html(html).show();
             } else {
-                $result.addClass('error').html('<h4>❌ Clear Failed</h4><p>' + escHtml(response.data) + '</p>').show();
+                $result.addClass('error').html('<h4>&#10007; Clear Failed</h4><p>' + escHtml(r.data) + '</p>').show();
             }
-        }).fail(function(xhr, status, error) {
-            console.log('AJAX request failed:', {xhr: xhr, status: status, error: error});
-            $result.addClass('error').html('<h4>❌ Network Error</h4><p>Failed to clear tokens. Check browser console for details.</p>').show();
+        }).fail(function() {
+            $result.addClass('error').html('<h4>&#10007; Network Error</h4><p>Failed to clear tokens.</p>').show();
         }).always(function() {
-            $button.prop('disabled', false).text('Clear All Tokens & Sessions');
+            $btn.prop('disabled', false).text('Clear All Tokens & Sessions');
         });
     });
+
+    // ── Webhook activity log ──────────────────────────────────────────────
+    var webhookLogTimer = null;
+
+    var statusColors = {
+        received:            '#3498db',
+        processed:           '#27ae60',
+        duplicate:           '#8e44ad',
+        already_has_access:  '#8e44ad',
+        skipped:             '#888',
+        verification_failed: '#c0392b',
+        missing_metadata:    '#e67e22',
+        jwt_failed:          '#c0392b',
+        failed:              '#c0392b'
+    };
+
+    function statusBadge(status) {
+        var color = statusColors[status] || '#666';
+        return '<span style="background:' + color + ';color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">' + escHtml(status.replace(/_/g, ' ')) + '</span>';
+    }
+
+    function renderWebhookLog(rows) {
+        var $empty = $('#lem-webhook-log-empty');
+        var $table = $('#lem-webhook-log-table');
+        var $tbody = $('#lem-webhook-log-tbody');
+
+        if (!rows || rows.length === 0) {
+            $empty.text('No webhook activity recorded yet. Trigger a test webhook from your provider dashboard or via Stripe CLI to populate this log.').show();
+            $table.hide();
+            return;
+        }
+
+        var html = '';
+        rows.forEach(function(r) {
+            var details = '';
+            if (r.message)    details += escHtml(r.message);
+            if (r.payment_id) details += '<br><small style="color:#666;">payment_id: <code>' + escHtml(r.payment_id) + '</code></small>';
+            if (r.event_id)   details += ' &nbsp;<small style="color:#666;">event_id: <code>' + escHtml(r.event_id) + '</code></small>';
+            if (r.email)      details += ' &nbsp;<small style="color:#666;">email: ' + escHtml(r.email) + '</small>';
+            if (r.source_ip)  details += '<br><small style="color:#999;">from ' + escHtml(r.source_ip) + (parseInt(r.has_signature) ? ' • signed' : ' • unsigned') + '</small>';
+
+            html += '<tr>';
+            html += '<td><small>' + escHtml(r.received_at) + '</small></td>';
+            html += '<td>' + escHtml(r.provider || '—') + '</td>';
+            html += '<td>' + statusBadge(r.status) + '</td>';
+            html += '<td><code style="font-size:11px;">' + escHtml(r.event_type || '—') + '</code></td>';
+            html += '<td>' + details + '</td>';
+            html += '</tr>';
+        });
+        $tbody.html(html);
+        $empty.hide();
+        $table.show();
+    }
+
+    function loadWebhookLog() {
+        $.post(lem_ajax.ajax_url, {
+            action: 'lem_get_webhook_log',
+            nonce:  lem_ajax.nonce
+        }, function(r) {
+            if (r.success) renderWebhookLog(r.data.rows);
+        });
+    }
+
+    function startWebhookAutoRefresh() {
+        stopWebhookAutoRefresh();
+        webhookLogTimer = setInterval(loadWebhookLog, 5000);
+    }
+    function stopWebhookAutoRefresh() {
+        if (webhookLogTimer) { clearInterval(webhookLogTimer); webhookLogTimer = null; }
+    }
+
+    $('#lem-refresh-webhook-log').on('click', loadWebhookLog);
+
+    $('#lem-webhook-log-auto').on('change', function() {
+        if (this.checked) startWebhookAutoRefresh();
+        else stopWebhookAutoRefresh();
+    });
+
+    $('#lem-clear-webhook-log').on('click', function() {
+        if (!confirm('Clear all recorded webhook activity?')) return;
+        $.post(lem_ajax.ajax_url, {
+            action: 'lem_clear_webhook_log',
+            nonce:  lem_ajax.nonce
+        }, function(r) {
+            if (r.success) loadWebhookLog();
+        });
+    });
+
+    if ($('#lem-webhook-log-wrap').length) {
+        loadWebhookLog();
+        if ($('#lem-webhook-log-auto').is(':checked')) startWebhookAutoRefresh();
+    }
 });
-</script> 
+</script>

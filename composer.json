@@ -3,8 +3,7 @@
     "description": "WordPress plugin for managing live stream events and JWT generation",
     "type": "wordpress-plugin",
     "require": {
-        "firebase/php-jwt": "^6.0",
-        "stripe/stripe-php": "^10.0"
+        "firebase/php-jwt": "^6.0"
     },
     "autoload": {
         "psr-4": {

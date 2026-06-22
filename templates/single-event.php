@@ -212,6 +212,31 @@ $viewer_display_name = ! empty( $event_access['chat_name'] )
 
         <!-- ── Marketing / paywall gate ──────────────────────────────────── -->
         <div class="lem-marketing-page">
+            <?php
+            // PayPal capture handler redirects here with ?lem_payment=processing or ?lem_payment_error=1
+            $lem_pay_return = isset($_GET['lem_payment']) ? sanitize_key(wp_unslash($_GET['lem_payment'])) : '';
+            $lem_pay_err    = isset($_GET['lem_payment_error']);
+            if ($lem_pay_err) :
+                ?>
+            <div class="lem-payment-return-notice lem-payment-return-notice--error" role="alert" style="margin:12px 18px 0;padding:12px 16px;border-radius:8px;background:#fcf0f1;border:1px solid #d63638;color:#1d2327;font-size:14px;line-height:1.45;">
+                <?php esc_html_e('Payment could not be confirmed. Please try again or use another payment method.', 'live-event-manager'); ?>
+            </div>
+            <?php elseif ($lem_pay_return === 'processing') :
+                $paypal_order = isset($_GET['paypal_order']) ? sanitize_text_field(wp_unslash($_GET['paypal_order'])) : '';
+                ?>
+            <div class="lem-payment-return-notice lem-payment-return-notice--ok" role="status" style="margin:12px 18px 0;padding:12px 16px;border-radius:8px;background:#edfaed;border:1px solid #46b450;color:#1d2327;font-size:14px;line-height:1.45;">
+                <?php esc_html_e('Payment received. Confirming your access now — check your email for your magic link.', 'live-event-manager'); ?>
+            </div>
+            <?php if ($paypal_order !== '') : ?>
+            <script>
+            window.lemPaymentReconcile = {
+                session_id: <?php echo wp_json_encode($paypal_order); ?>,
+                provider_id: 'paypal',
+                event_id: <?php echo wp_json_encode((string) get_the_ID()); ?>
+            };
+            </script>
+            <?php endif; ?>
+            <?php endif; ?>
             <div class="lem-marketing-hero">
                 <h1 class="lem-marketing-title"><?php echo esc_html(get_the_title()); ?></h1>
                 <?php if ($formatted_date): ?>
