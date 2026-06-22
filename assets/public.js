@@ -230,21 +230,23 @@ jQuery(document).ready(function($) {
         var viewerName  = window.lemViewerName || 'Viewer';
         var channelName = 'lem:chat:' + eventId;
 
-        // Use authCallback so we can unwrap WP's {"success":true,"data":{...}} envelope.
+        // Ably v2: authCallback must return a Promise (no v1 completion callback).
         var ably = new Ably.Realtime({
-            authCallback: function(tokenParams, callback) {
-                $.post(window.lemAblyAuthUrl, {
-                    action:   'lem_ably_token',
-                    nonce:    window.lemNonce,
-                    event_id: eventId
-                }, function(response) {
-                    if (response && response.success && response.data) {
-                        callback(null, response.data);
-                    } else {
-                        callback(new Error((response && response.data) || 'Token request failed'));
-                    }
-                }, 'json').fail(function() {
-                    callback(new Error('Token request network error'));
+            authCallback: function() {
+                return new Promise(function(resolve, reject) {
+                    $.post(window.lemAblyAuthUrl, {
+                        action:   'lem_ably_token',
+                        nonce:    window.lemNonce,
+                        event_id: eventId
+                    }, function(response) {
+                        if (response && response.success && response.data) {
+                            resolve(response.data);
+                        } else {
+                            reject(new Error((response && response.data) || 'Token request failed'));
+                        }
+                    }, 'json').fail(function() {
+                        reject(new Error('Token request network error'));
+                    });
                 });
             }
         });
@@ -284,8 +286,8 @@ jQuery(document).ready(function($) {
                 name: viewerName,
                 text: text,
                 ts:   Date.now()
-            }, function(err) {
-                if (err) console.warn('[LEM Chat] Publish error:', err);
+            }).catch(function(err) {
+                console.warn('[LEM Chat] Publish error:', err);
             });
 
             $('#lem-chat-input').val('').focus();
