@@ -62,7 +62,9 @@ trait LEM_Trait_Jwt_And_Payments {
             return false;
         }
         if (!is_array($tok)) {
-            $this->last_jwt_error = 'Provider "' . $provider->get_id() . '" returned a non-array result. Check provider configuration (e.g. Mux signing key, event playback_id, Firebase JWT library).';
+            if (empty($this->last_jwt_error)) {
+                $this->last_jwt_error = 'Provider "' . $provider->get_id() . '" returned a non-array result. Check provider configuration (e.g. Mux signing key, event playback_id, Firebase JWT library).';
+            }
             $this->debug_log('generate_jwt: ' . $this->last_jwt_error);
             return false;
         }

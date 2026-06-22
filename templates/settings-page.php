@@ -63,7 +63,7 @@ if (! isset($tabs[ $active_tab ])) {
 }
 
 // ── Webhook URLs ──────────────────────────────────────────────────────────────
-$stripe_webhook_url = admin_url('admin-ajax.php?action=lem_stripe_webhook');
+$stripe_webhook_url = admin_url('admin-ajax.php?action=lem_payment_webhook');
 $mux_webhook_url    = admin_url('admin-ajax.php?action=lem_mux_webhook');
 $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
 ?>

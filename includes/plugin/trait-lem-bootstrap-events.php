@@ -96,6 +96,9 @@ trait LEM_Trait_Bootstrap_And_Events {
         // are owned by adaptor plugins — core ships no vendor-specific AJAX actions.
         add_action('wp_ajax_lem_payment_webhook',        array($this, 'handle_payment_webhook'));
         add_action('wp_ajax_nopriv_lem_payment_webhook', array($this, 'handle_payment_webhook'));
+        // Back-compat for Stripe CLI / dashboards still using the old action name.
+        add_action('wp_ajax_lem_stripe_webhook',        array($this, 'handle_payment_webhook'));
+        add_action('wp_ajax_nopriv_lem_stripe_webhook', array($this, 'handle_payment_webhook'));
 
         add_action('wp_ajax_lem_reconcile_payment',        array($this, 'ajax_reconcile_payment'));
         add_action('wp_ajax_nopriv_lem_reconcile_payment', array($this, 'ajax_reconcile_payment'));
