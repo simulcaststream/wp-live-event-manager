@@ -44,10 +44,6 @@ if (isset($_POST['lem_settings_nonce']) && wp_verify_nonce($_POST['lem_settings_
         update_option('lem_device_settings', $device_settings);
     }
 
-    if ($saved_tab === 'chat') {
-        $settings['ably_api_key'] = sanitize_text_field($_POST['ably_api_key'] ?? '');
-    }
-
     update_option('lem_settings', $settings);
 
     echo '<div class="notice notice-success is-dismissible"><p><strong>Settings saved.</strong></p></div>';
@@ -55,13 +51,16 @@ if (isset($_POST['lem_settings_nonce']) && wp_verify_nonce($_POST['lem_settings_
 
 // ── Active tab ────────────────────────────────────────────────────────────────
 $active_tab = sanitize_text_field($_GET['tab'] ?? 'streaming');
-$tabs = [
+$tabs       = array(
     'streaming' => 'Streaming',
     'payments'  => 'Payments',
     'cache'     => 'Cache & Access',
     'device'    => 'Device',
-    'chat'      => 'Chat',
-];
+);
+
+if (! isset($tabs[ $active_tab ])) {
+    $active_tab = 'streaming';
+}
 
 // ── Webhook URLs ──────────────────────────────────────────────────────────────
 $stripe_webhook_url = admin_url('admin-ajax.php?action=lem_stripe_webhook');
@@ -143,12 +142,6 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
             </tr>
         </table>
 
-        <p>
-            <a href="<?php echo esc_url($vendors_url); ?>" class="button">
-                Configure <?php echo esc_html($all_providers[$active_pid] ?? $active_pid); ?> credentials &rarr;
-            </a>
-        </p>
-
         <?php endif; ?>
 
         <?php /* ═══ PAYMENTS ════════════════════════════════════════════════ */ ?>
@@ -191,12 +184,6 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
                 </td>
             </tr>
         </table>
-
-        <p>
-            <a href="<?php echo esc_url(add_query_arg('pid', $active_pay_pid, $services_pay_url)); ?>" class="button">
-                Configure <?php echo esc_html($active_pay_prov ? $active_pay_prov->get_name() : $active_pay_pid); ?> credentials &rarr;
-            </a>
-        </p>
 
         <?php endif; ?>
 
@@ -343,70 +330,6 @@ $jwt_status_url     = get_rest_url(null, 'lem/v1/check-jwt-status');
                         Open Debug page &rarr;
                     </a>
                     <p class="description">Redis connection test, system info, and troubleshooting tools.</p>
-                </td>
-            </tr>
-        </table>
-
-        <?php endif; ?>
-
-        <?php /* ═══ CHAT ════════════════════════════════════════════════════ */ ?>
-        <?php if ($active_tab === 'chat'):
-            $ably_key     = $settings['ably_api_key'] ?? '';
-            $ably_ok      = !empty($ably_key) && strpos($ably_key, ':') !== false;
-            $ably_doc_url = 'https://ably.com/docs/auth/basic';
-        ?>
-        <h2>Ably Live Chat</h2>
-        <p>
-            Live chat is powered by <a href="https://ably.com" target="_blank">Ably</a>.
-            Create a free account, copy your <strong>API key</strong> from the Ably dashboard,
-            and paste it below. Viewers receive short-lived capability-scoped tokens — your
-            API key is never exposed to the browser.
-            <a href="<?php echo esc_url($ably_doc_url); ?>" target="_blank">Learn more &rarr;</a>
-        </p>
-
-        <?php if ($ably_ok): ?>
-        <div class="notice notice-success inline" style="margin:0 0 16px;">
-            <p>Ably is configured. Live chat will be enabled on watch pages.</p>
-        </div>
-        <?php else: ?>
-        <div class="notice notice-warning inline" style="margin:0 0 16px;">
-            <p><strong>Not configured.</strong> Chat will be hidden until you add your Ably API key.</p>
-        </div>
-        <?php endif; ?>
-
-        <table class="form-table">
-            <tr>
-                <th><label for="ably_api_key">Ably API Key</label></th>
-                <td>
-                    <input type="password" id="ably_api_key" name="ably_api_key"
-                           value="<?php echo esc_attr($ably_key); ?>"
-                           class="regular-text"
-                           placeholder="xxxxxxxx.yyyyyy:zzzzzzzzzzzzzzz"
-                           autocomplete="new-password">
-                    <p class="description">
-                        Format: <code>APP_ID.KEY_ID:KEY_SECRET</code> — found in
-                        <strong>Ably Dashboard &rarr; API Keys</strong>.
-                        Use a key with <em>Subscribe</em>, <em>Publish</em>, and <em>Presence</em>
-                        capabilities only (not the root key).
-                    </p>
-                </td>
-            </tr>
-        </table>
-
-        <h3>How It Works</h3>
-        <ol>
-            <li>Viewer loads watch page &rarr; plugin issues a short-lived Ably token (1 hour) scoped to <code>lem:chat:{event_id}</code>.</li>
-            <li>The token is issued only to viewers whose session cookie has been validated — paywalled events stay paywalled.</li>
-            <li>Messages are broadcast in real-time via Ably channels; history rewinds 2 minutes on join.</li>
-        </ol>
-
-        <h3>Endpoint Reference</h3>
-        <table class="form-table">
-            <tr>
-                <th>Token auth URL</th>
-                <td>
-                    <code><?php echo esc_url(admin_url('admin-ajax.php') . '?action=lem_ably_token'); ?></code>
-                    <span class="description"> — POST, requires <code>nonce</code> + <code>event_id</code></span>
                 </td>
             </tr>
         </table>

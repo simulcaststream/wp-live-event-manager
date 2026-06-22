@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simulcast.stream/lem/template-pack.schema.json",
+  "title": "LEM Template Pack Manifest",
+  "description": "Public contract for template.json inside a Live Event Manager template pack ZIP.",
+  "type": "object",
+  "required": ["name", "slug", "version"],
+  "additionalProperties": true,
+  "properties": {
+    "lem_format": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Manifest format version. Bump when breaking fields change; core rejects formats newer than LEM_FORMAT_VERSION."
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Must match the ZIP top-level folder name; cannot be \"default\"."
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version of this pack."
+    },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "author_url": { "type": "string", "format": "uri" },
+    "type": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "e.g. event_page, paywall"
+    },
+    "files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Extra relative paths allowed in ZIP beyond the default install set."
+    },
+    "requires_lem": {
+      "type": "string",
+      "description": "Minimum plugin version, e.g. \">=1.2.0\". Checked on install and activate."
+    },
+    "preview_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "HTTPS preview image for the Templates admin screen."
+    },
+    "screenshot": {
+      "type": "string",
+      "format": "uri",
+      "description": "Legacy alias for preview_url (HTTPS)."
+    },
+    "support_url": { "type": "string", "format": "uri" },
+    "docs_url": { "type": "string", "format": "uri" },
+    "license": {
+      "type": "string",
+      "description": "SPDX id or short label for display only; not enforced by core."
+    },
+    "update_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Reserved. Core does not fetch updates; marketplace plugins may use with lem_template_pack_update_response."
+    },
+    "update_id": {
+      "type": "string",
+      "description": "Reserved product id for a future update channel."
+    },
+    "marketplace": {
+      "type": "string",
+      "description": "Reserved. Ignored by core; for commercial companion plugins."
+    },
+    "product_id": {
+      "type": "string",
+      "description": "Reserved. Ignored by core."
+    },
+    "license_required": {
+      "type": "boolean",
+      "description": "Reserved hint for licensing plugins; not enforced by core."
+    }
+  }
+}

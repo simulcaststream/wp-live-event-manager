@@ -1,0 +1,179 @@
+/* Templates admin screen (Live Event Manager → Templates) */
+
+.lem-templates-intro {
+    color: #646970;
+    max-width: 640px;
+}
+
+.lem-template-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.25rem;
+    margin: 1.5rem 0;
+}
+
+.lem-template-card {
+    background: #fff;
+    border: 1px solid #e0e0e8;
+    border-radius: 8px;
+    padding: 1.25rem;
+}
+
+.lem-template-card.is-active {
+    border-color: #7f5af0;
+    box-shadow: 0 0 0 2px rgba(127, 90, 240, 0.25);
+}
+
+.lem-template-card__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.lem-template-card__title {
+    font-size: 1rem;
+    margin: 0;
+}
+
+.lem-template-card__badge {
+    background: #7f5af0;
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 20px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.lem-template-card__preview {
+    width: 100%;
+    height: auto;
+    max-height: 140px;
+    object-fit: cover;
+    border-radius: 6px;
+    margin-bottom: 0.75rem;
+    border: 1px solid #e0e0e8;
+}
+
+.lem-template-card__desc {
+    color: #555;
+    font-size: 0.875rem;
+    margin: 0.35rem 0 0.6rem;
+}
+
+.lem-template-card__meta {
+    font-size: 0.8rem;
+    color: #888;
+    margin-bottom: 1rem;
+}
+
+.lem-template-card__actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.lem-template-card__actions .lem-tpl-delete {
+    color: #c0392b;
+    border-color: #c0392b;
+}
+
+.lem-template-card__links {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+}
+
+.lem-template-card__links a {
+    margin-right: 0.75rem;
+}
+
+.lem-tpl-msg {
+    margin-top: 0.6rem;
+    font-size: 0.85rem;
+    display: none;
+}
+
+.lem-templates-section {
+    margin: 2rem 0;
+}
+
+.lem-templates-section h2 {
+    font-size: 1.1rem;
+}
+
+.lem-templates-section p {
+    color: #555;
+    max-width: 560px;
+    font-size: 0.9rem;
+}
+
+.lem-bundled-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin: 1rem 0 0;
+}
+
+.lem-bundled-card {
+    background: #fff;
+    border: 1px solid #e0e0e8;
+    border-radius: 8px;
+    padding: 1.1rem 1.25rem;
+    min-width: 220px;
+    max-width: 300px;
+}
+
+.lem-bundled-card__title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+
+.lem-bundled-card__desc {
+    font-size: 0.82rem;
+    color: #666;
+    margin: 0.2rem 0 0.85rem;
+    line-height: 1.45;
+}
+
+.lem-template-upload-form {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+}
+
+.lem-template-upload-form input[type="file"] {
+    border: 1px solid #ccd0d4;
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+    background: #fafafa;
+}
+
+.lem-template-format pre {
+    background: #f4f4f8;
+    padding: 1rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    max-width: 520px;
+    line-height: 1.6;
+    overflow-x: auto;
+}
+
+.lem-template-format .comment {
+    color: #888;
+}
+
+.lem-template-upload-result {
+    margin-top: 0.75rem;
+    font-size: 0.9rem;
+}
+
+#lem-template-spinner {
+    float: none;
+    margin: 0;
+}

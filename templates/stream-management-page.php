@@ -14,20 +14,38 @@ global $live_event_manager;
 // ── Cache bust (linked from empty-state) ─────────────────────────────────────
 if (!empty($_GET['lem_bust_cache']) && current_user_can('manage_options')) {
     $settings_tmp = get_option('lem_settings', []);
-    $pid_tmp      = $settings_tmp['streaming_provider'] ?? 'mux';
-    LEM_Cache::del($pid_tmp . ':live_streams');
+    // Bust cache for the currently-viewed provider (falls back to active).
+    $pid_tmp      = sanitize_key($_GET['provider'] ?? '') ?: ($settings_tmp['streaming_provider'] ?? 'mux');
+    $cache = LEM_Cache::instance();
+    if ($cache) {
+        $cache->del($pid_tmp . ':live_streams');
+    }
 }
 
 $settings           = get_option('lem_settings', []);
 $factory            = LEM_Streaming_Provider_Factory::get_instance();
 $active_provider_id = $settings['streaming_provider'] ?? 'mux';
-$provider           = $factory->get_provider($active_provider_id, $live_event_manager);
+$available_provider_ids = $factory->get_available_providers();
+
+// If settings point at a provider that isn't registered (common during migrations),
+// fall back to the first registered provider instead of a broken default.
+if (!in_array($active_provider_id, $available_provider_ids, true)) {
+    $active_provider_id = $available_provider_ids[0] ?? $active_provider_id;
+}
+
+$viewing_provider_id = sanitize_key($_GET['provider'] ?? '');
+if ($viewing_provider_id === '' || !in_array($viewing_provider_id, $available_provider_ids, true)) {
+    $viewing_provider_id = $active_provider_id;
+}
+
+$provider           = $factory->get_provider($viewing_provider_id, $live_event_manager);
 
 // is_configured() is the interface-level check — works for every provider.
 $has_api_credentials = $provider && $provider->is_configured();
 $fully_configured    = $has_api_credentials;
 $create_fields       = $provider ? $provider->get_create_stream_fields() : array();
 $can_create          = $has_api_credentials && !empty($create_fields);
+$can_add_stream_name = ($viewing_provider_id === 'ome');
 
 // ── Resolve the active stream ─────────────────────────────────────────────────
 $current_event_id = isset($_GET['event_id'])  ? intval($_GET['event_id'])                       : 0;
@@ -41,6 +59,7 @@ $fetch_error       = null;
 
 if ($live_event_manager && $has_api_credentials) {
     $request        = new WP_REST_Request('GET', '/lem/v1/live-streams');
+    $request->set_param('provider', $viewing_provider_id);
     // Always bypass cache on the admin page so the list is always up to date
     $streams_result = $live_event_manager->list_live_streams($request, true);
     if (is_wp_error($streams_result)) {
@@ -55,6 +74,17 @@ if ($live_event_manager && $has_api_credentials) {
 } elseif (!$has_api_credentials) {
     $fetch_error = 'API credentials not configured.';
 }
+
+// Debug: embed state in HTML source for troubleshooting (after variables exist).
+$debug_available = implode(',', $available_provider_ids);
+echo "\n<!-- LEM streams debug: get_provider=" . sanitize_text_field(wp_unslash($_GET['provider'] ?? ''))
+    . " resolved_provider={$viewing_provider_id} active={$active_provider_id}"
+    . " available=[{$debug_available}]"
+    . " can_create=" . ($can_create ? '1' : '0')
+    . " can_add_stream_name=" . ($can_add_stream_name ? '1' : '0')
+    . " configured=" . ($has_api_credentials ? '1' : '0')
+    . " streams=" . (is_array($available_streams) ? count($available_streams) : 0)
+    . " -->\n";
 
 
 // ── Fetch setup data for active stream ───────────────────────────────────────
@@ -75,18 +105,21 @@ if ($active_stream_id && $live_event_manager && $has_api_credentials) {
     // RTMP info
     $req = new WP_REST_Request('GET', '/lem/v1/rtmp-info');
     $req->set_param('stream_id', $active_stream_id);
+    $req->set_param('provider', $viewing_provider_id);
     $r = $live_event_manager->get_rtmp_info($req);
     if (!is_wp_error($r)) $rtmp_info = $r;
 
     // Stream status
     $req = new WP_REST_Request('GET', '/lem/v1/stream-status');
     $req->set_param('stream_id', $active_stream_id);
+    $req->set_param('provider', $viewing_provider_id);
     $r = $live_event_manager->get_stream_status($req);
     if (!is_wp_error($r)) $stream_status = $r;
 
     // Simulcast targets
     $req = new WP_REST_Request('GET', '/lem/v1/simulcast-targets');
     $req->set_param('stream_id', $active_stream_id);
+    $req->set_param('provider', $viewing_provider_id);
     $r = $live_event_manager->get_simulcast_targets($req);
     if (!is_wp_error($r) && isset($r['data'])) $simulcast_targets = $r['data'];
 }
@@ -95,7 +128,35 @@ if ($active_stream_id && $live_event_manager && $has_api_credentials) {
 function lem_streams_url($stream_id = '') {
     $args = ['post_type' => 'lem_event', 'page' => 'live-event-manager-stream-management'];
     if ($stream_id) $args['stream_id'] = $stream_id;
+    // Prefer the resolved viewing provider (stable even if ?provider= is missing from the URL).
+    global $viewing_provider_id;
+    if (!empty($viewing_provider_id)) {
+        $args['provider'] = $viewing_provider_id;
+    }
     return admin_url(add_query_arg($args, 'edit.php'));
+}
+
+// Base query args for provider switching (preserve stream/event context).
+$streams_nav_base = [
+    'post_type' => 'lem_event',
+    'page'      => 'live-event-manager-stream-management',
+];
+foreach (['event_id', 'stream_id'] as $nav_key) {
+    if (!isset($_GET[$nav_key])) {
+        continue;
+    }
+    $raw = wp_unslash($_GET[$nav_key]);
+    if ($nav_key === 'event_id') {
+        $eid = intval($raw);
+        if ($eid > 0) {
+            $streams_nav_base['event_id'] = (string) $eid;
+        }
+    } else {
+        $val = sanitize_text_field($raw);
+        if ($val !== '') {
+            $streams_nav_base[$nav_key] = $val;
+        }
+    }
 }
 ?>
 
@@ -104,12 +165,40 @@ function lem_streams_url($stream_id = '') {
     <!-- ── Page header ────────────────────────────────────────────────────── -->
     <div class="lem-streams-header">
         <h1>Live Streams</h1>
-        <?php if ($can_create): ?>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <?php if (!empty($available_provider_ids)): ?>
+            <div style="display:flex; align-items:center; gap:6px; margin:0;">
+                <label for="lem-provider-select" style="font-weight:600;">Provider</label>
+                <select id="lem-provider-select" name="provider">
+                    <?php foreach ($available_provider_ids as $pid):
+                        $p = $factory->get_provider($pid, $live_event_manager);
+                        $label = $p ? $p->get_name() : ucfirst($pid);
+                        $configured = $p ? $p->is_configured() : false;
+                        $suffix = $configured ? '' : ' (not configured)';
+                    ?>
+                    <option value="<?php echo esc_attr($pid); ?>" <?php selected($viewing_provider_id, $pid); ?>>
+                        <?php echo esc_html($label . $suffix); ?>
+                    </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <?php endif; ?>
+        <?php if ($can_create || $can_add_stream_name): ?>
         <button type="button" class="button button-primary" id="lem-toggle-create">
             + New Stream
         </button>
         <?php endif; ?>
+        </div>
     </div>
+
+    <?php if (!in_array('ome', $available_provider_ids, true)): ?>
+    <div class="notice notice-warning inline" style="margin-top:12px;">
+        <p>
+            <strong>OvenMediaEngine provider is not registered.</strong>
+            Install/activate <code>LEM Adaptors</code> (or any plugin that registers the <code>ome</code> streaming provider) so the Streams page can target OME.
+        </p>
+    </div>
+    <?php endif; ?>
 
     <?php if ($fetch_error): ?>
     <div class="notice notice-error inline" style="margin-top:12px;">
@@ -124,19 +213,29 @@ function lem_streams_url($stream_id = '') {
     <?php if (!$has_api_credentials && !$fetch_error): ?>
     <div class="notice notice-warning inline" style="margin-top:12px;">
         <p>
-            <strong><?php echo esc_html(ucfirst($active_provider_id)); ?> is not fully configured.</strong>
+            <strong><?php echo esc_html(ucfirst($viewing_provider_id)); ?> is not fully configured.</strong>
             <a href="<?php echo esc_url(admin_url('edit.php?post_type=lem_event&page=live-event-manager-services&service=streaming')); ?>">Complete setup in Services &rarr;</a>
         </p>
     </div>
     <?php endif; ?>
 
     <!-- ── Create stream panel (hidden by default) ────────────────────────── -->
-    <?php if ($can_create): ?>
+    <?php if ($can_create || $can_add_stream_name): ?>
     <div id="lem-create-panel" class="lem-panel" style="display:none;">
         <h2>New Stream</h2>
         <form id="lem-create-stream-form">
-            <input type="hidden" name="provider" value="<?php echo esc_attr($active_provider_id); ?>">
+            <input type="hidden" name="provider" value="<?php echo esc_attr($viewing_provider_id); ?>">
             <table class="form-table" style="margin:0;">
+                <?php if ($can_add_stream_name && empty($create_fields)): ?>
+                <tr>
+                    <th><label for="lem-new-stream_name">Stream name</label></th>
+                    <td>
+                        <input type="text" id="lem-new-stream_name" name="stream_name" class="regular-text" required
+                               placeholder="e.g. event1">
+                        <p class="description">OME stream IDs are just stream names. You don’t have to “create” them server-side—OBS pushing to this name will start it.</p>
+                    </td>
+                </tr>
+                <?php endif; ?>
                 <?php foreach ($create_fields as $field):
                     $fkey   = $field['key']         ?? '';
                     $flabel = $field['label']        ?? $fkey;
@@ -177,9 +276,9 @@ function lem_streams_url($stream_id = '') {
             </div>
         </form>
     </div>
-    <?php elseif ($has_api_credentials && empty($create_fields)): ?>
+    <?php elseif ($has_api_credentials && empty($create_fields) && !$can_add_stream_name): ?>
     <div class="notice notice-info inline" style="margin-bottom:12px;">
-        <p><?php echo esc_html(ucfirst($active_provider_id)); ?> streams are created by pushing from your encoder — no stream creation needed here.</p>
+        <p><?php echo esc_html(ucfirst($viewing_provider_id)); ?> streams are created by pushing from your encoder — no stream creation needed here.</p>
     </div>
     <?php endif; ?>
 
@@ -191,9 +290,9 @@ function lem_streams_url($stream_id = '') {
                 <?php if ($fetch_error): ?>
                     Could not load streams — see the error above.
                 <?php elseif ($has_api_credentials): ?>
-                    No streams found in your <?php echo esc_html(ucfirst($active_provider_id)); ?> account.
+                    No streams found in your <?php echo esc_html(ucfirst($viewing_provider_id)); ?> account.
                     Click <strong>+ New Stream</strong> to create one, or
-                    <a href="<?php echo esc_url(add_query_arg('lem_bust_cache', '1')); ?>">refresh the list</a>
+                    <a href="<?php echo esc_url(add_query_arg(array('lem_bust_cache' => '1', 'provider' => $viewing_provider_id))); ?>">refresh the list</a>
                     if you just created a stream elsewhere.
                 <?php else: ?>
                     Configure your <a href="<?php echo esc_url(admin_url('edit.php?post_type=lem_event&page=live-event-manager-services&service=streaming')); ?>">streaming credentials</a> to get started.
@@ -228,7 +327,7 @@ function lem_streams_url($stream_id = '') {
                     };
                     if (empty($sid)) continue;
                 ?>
-                <tr class="<?php echo $is_active_row ? 'lem-row-selected' : ''; ?>" data-stream-id="<?php echo esc_attr($sid); ?>">
+                <tr class="<?php echo $is_active_row ? 'lem-row-selected' : ''; ?>" data-stream-id="<?php echo esc_attr($sid); ?>" data-provider="<?php echo esc_attr($viewing_provider_id); ?>">
                     <td>
                         <strong><?php echo esc_html($sname); ?></strong><br>
                         <code class="lem-id"><?php echo esc_html($sid); ?></code>
@@ -267,7 +366,8 @@ function lem_streams_url($stream_id = '') {
                             <?php endif; ?>
                             <button type="button" class="button button-small button-link-delete lem-delete-stream"
                                     data-stream-id="<?php echo esc_attr($sid); ?>"
-                                    data-stream-name="<?php echo esc_attr($sname); ?>">
+                                    data-stream-name="<?php echo esc_attr($sname); ?>"
+                                    data-provider="<?php echo esc_attr($viewing_provider_id); ?>">
                                 Delete
                             </button>
                         </div>
@@ -495,6 +595,17 @@ jQuery(document).ready(function($) {
     var setupNonce = <?php echo wp_json_encode(wp_create_nonce('lem_stream_setup_nonce')); ?>;
     var ajaxUrl    = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
     var streamId   = '<?php echo esc_js($active_stream_id); ?>';
+    var providerId = '<?php echo esc_js($viewing_provider_id); ?>';
+    var streamsPageUrl = <?php echo wp_json_encode(admin_url('edit.php')); ?>;
+    var streamsNavBase   = <?php echo wp_json_encode($streams_nav_base); ?>;
+
+    // Provider switcher: navigate with an explicit `provider` query param.
+    // Some environments don't reliably round-trip arbitrary GET fields from form posts in wp-admin.
+    $('#lem-provider-select').on('change', function() {
+        var pid = $(this).val();
+        var params = $.extend({}, streamsNavBase, { provider: pid });
+        window.location.href = streamsPageUrl + '?' + $.param(params);
+    });
 
     // ── Create panel toggle ───────────────────────────────────────────────
     $('#lem-toggle-create').on('click', function() {
@@ -527,7 +638,8 @@ jQuery(document).ready(function($) {
             }
         });
 
-        if (!data['passthrough'] && !data['name']) {
+        // OME uses stream_name; others use provider-specific fields.
+        if (!data['stream_name'] && !data['passthrough'] && !data['name']) {
             $form.find('input[type="text"]:first').focus();
             return;
         }
@@ -586,7 +698,7 @@ jQuery(document).ready(function($) {
         btn.prop('disabled', true).text('Saving…');
 
         // Collect all named fields from the modal form.
-        var data = { action: 'lem_update_stream', stream_id: sid, nonce: mgmtNonce };
+        var data = { action: 'lem_update_stream', stream_id: sid, nonce: mgmtNonce, provider: providerId };
         $form.find('[name]').each(function() {
             var $el = $(this);
             var key = $el.attr('name');
@@ -623,6 +735,7 @@ jQuery(document).ready(function($) {
         $.post(ajaxUrl, {
             action:    'lem_delete_stream',
             stream_id: sid,
+            provider:  $(this).data('provider') || providerId,
             nonce:     mgmtNonce
         }, function(response) {
             if (response.success) {
@@ -687,6 +800,7 @@ jQuery(document).ready(function($) {
         $.post(ajaxUrl, {
             action:    'lem_create_simulcast_target',
             stream_id: streamId,
+            provider:  providerId,
             url:       url,
             nonce:     setupNonce
         }, function(response) {
@@ -713,6 +827,7 @@ jQuery(document).ready(function($) {
             action:    'lem_delete_simulcast_target',
             stream_id: streamId,
             target_id: tid,
+            provider:  providerId,
             nonce:     setupNonce
         }, function(response) {
             if (response.success) {

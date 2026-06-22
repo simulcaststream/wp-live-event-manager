@@ -35,6 +35,28 @@ function lem_svc_url(string $service, string $provider = '', string $subtab = 'c
     return admin_url(add_query_arg($args, 'edit.php'));
 }
 
+/**
+ * Map a row from get_settings_fields() to the lem_settings option key.
+ * Providers may use either associative arrays (outer key = option name) or a numeric list with ['key' => 'option_name'].
+ *
+ * @param mixed $outer_key Index/key from foreach over get_settings_fields().
+ * @param array $field     Field definition row.
+ * @return string|null     Option key, or null if the row cannot be mapped.
+ */
+function lem_settings_field_option_key($outer_key, array $field): ?string {
+    if (array_key_exists('key', $field) && $field['key'] !== '' && $field['key'] !== null) {
+        return (string) $field['key'];
+    }
+    // Associative field maps use the outer array key; numeric lists must include ['key' => ...].
+    if (is_int($outer_key)) {
+        return null;
+    }
+    if ($outer_key === '' || $outer_key === null) {
+        return null;
+    }
+    return (string) $outer_key;
+}
+
 // ── Active service & provider ──────────────────────────────────────────────────
 
 $active_service = sanitize_key($_GET['service'] ?? 'streaming');
@@ -122,11 +144,22 @@ if (
 
     if ($save_provider) {
         $fields = $save_provider->get_settings_fields();
-        foreach ($fields as $field) {
-            $key   = $field['key'] ?? '';
-            $type  = $field['type'] ?? 'text';
-            $raw   = $_POST[$key] ?? '';
-            if ($key === '') {
+        foreach ($fields as $outer_key => $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $key = lem_settings_field_option_key($outer_key, $field);
+            if ($key === null) {
+                continue;
+            }
+            $type = $field['type'] ?? 'text';
+            $raw  = isset($_POST[$key]) ? wp_unslash($_POST[$key]) : '';
+            if (!is_scalar($raw)) {
+                continue;
+            }
+            $raw = (string) $raw;
+            // Leave blank password inputs unchanged so secrets are not wiped on each save.
+            if ($type === 'password' && $raw === '' && isset($settings[$key]) && $settings[$key] !== '') {
                 continue;
             }
             $settings[$key] = ($type === 'textarea')
@@ -137,13 +170,24 @@ if (
         $settings = get_option('lem_settings', array());
 
         $validation = $save_provider->validate_settings($settings);
-        if ($validation === true || $validation === array()) {
+        if ($validation === true) {
             echo '<div class="notice notice-success is-dismissible"><p><strong>Credentials saved.</strong></p></div>';
+        } elseif (is_wp_error($validation)) {
+            echo '<div class="notice notice-error is-dismissible"><p><strong>' . esc_html($validation->get_error_message()) . '</strong></p></div>';
+        } elseif (is_array($validation)) {
+            // OME/Mux return a list of error strings; Stripe/PayPal return an associative sanitized map.
+            $is_indexed_error_list = $validation !== array()
+                && array_keys($validation) === range(0, count($validation) - 1);
+            if ($is_indexed_error_list) {
+                $issues = implode('</li><li>', array_map('esc_html', $validation));
+                echo '<div class="notice notice-warning is-dismissible"><p><strong>Saved with warnings:</strong></p><ul><li>' . $issues . '</li></ul></div>';
+            } else {
+                $settings = array_merge($settings, $validation);
+                update_option('lem_settings', $settings);
+                echo '<div class="notice notice-success is-dismissible"><p><strong>Credentials saved.</strong></p></div>';
+            }
         } else {
-            $issues = is_array($validation)
-                ? implode('</li><li>', array_map('esc_html', $validation))
-                : esc_html((string) $validation);
-            echo '<div class="notice notice-warning is-dismissible"><p><strong>Saved with warnings:</strong></p><ul><li>' . $issues . '</li></ul></div>';
+            echo '<div class="notice notice-success is-dismissible"><p><strong>Credentials saved.</strong></p></div>';
         }
     }
 }
@@ -200,15 +244,15 @@ function lem_render_provider_panel($provider, string $service, string $active_pi
             <input type="hidden" name="lem_vendor_provider" value="<?php echo esc_attr($pid); ?>">
 
             <?php
-            // Group fields by 'section' if provided
-            $sections    = array();
-            $no_section  = array();
-            foreach ($fields as $field) {
+            // Group fields by 'section' if provided, preserving the setting key.
+            $sections   = array();
+            $no_section = array();
+            foreach ($fields as $field_key => $field) {
                 $section = $field['section'] ?? '';
                 if ($section !== '') {
-                    $sections[$section][] = $field;
+                    $sections[$section][$field_key] = $field;
                 } else {
-                    $no_section[] = $field;
+                    $no_section[$field_key] = $field;
                 }
             }
             $all_groups = array_merge(
@@ -223,15 +267,18 @@ function lem_render_provider_panel($provider, string $service, string $active_pi
             <?php endif; ?>
 
             <table class="form-table">
-                <?php foreach ($group_fields as $field):
-                    $key         = $field['key']         ?? '';
-                    $label       = $field['label']        ?? $key;
+                <?php foreach ($group_fields as $key => $field):
+                    $input_key   = lem_settings_field_option_key($key, $field);
+                    if ($input_key === null) {
+                        continue;
+                    }
+                    $label       = $field['label']        ?? $input_key;
                     $type        = $field['type']         ?? 'text';
                     $description = $field['description']  ?? '';
                     $placeholder = $field['placeholder']  ?? '';
                     $required    = !empty($field['required']);
-                    $current_val = $settings[$key] ?? '';
-                    $input_id    = 'lem_field_' . esc_attr($key);
+                    $current_val = $settings[$input_key] ?? '';
+                    $input_id    = 'lem_field_' . esc_attr($input_key);
                 ?>
                 <tr>
                     <th scope="row">
@@ -242,11 +289,11 @@ function lem_render_provider_panel($provider, string $service, string $active_pi
                     </th>
                     <td>
                         <?php if ($type === 'textarea'): ?>
-                        <textarea id="<?php echo $input_id; ?>" name="<?php echo esc_attr($key); ?>"
+                        <textarea id="<?php echo $input_id; ?>" name="<?php echo esc_attr($input_key); ?>"
                                   class="regular-text" rows="4"
                                   placeholder="<?php echo esc_attr($placeholder); ?>"><?php echo esc_textarea($current_val); ?></textarea>
                         <?php elseif ($type === 'select' && !empty($field['options'])): ?>
-                        <select id="<?php echo $input_id; ?>" name="<?php echo esc_attr($key); ?>">
+                        <select id="<?php echo $input_id; ?>" name="<?php echo esc_attr($input_key); ?>">
                             <?php foreach ($field['options'] as $opt_val => $opt_label): ?>
                             <option value="<?php echo esc_attr($opt_val); ?>" <?php selected($current_val, $opt_val); ?>>
                                 <?php echo esc_html($opt_label); ?>
@@ -256,10 +303,11 @@ function lem_render_provider_panel($provider, string $service, string $active_pi
                         <?php else: ?>
                         <input type="<?php echo in_array($type, array('password', 'url', 'email'), true) ? esc_attr($type) : 'text'; ?>"
                                id="<?php echo $input_id; ?>"
-                               name="<?php echo esc_attr($key); ?>"
-                               value="<?php echo esc_attr($current_val); ?>"
+                               name="<?php echo esc_attr($input_key); ?>"
+                               <?php if ($type !== 'password'): ?>value="<?php echo esc_attr($current_val); ?>"<?php endif; ?>
                                class="regular-text"
-                               placeholder="<?php echo esc_attr($placeholder); ?>">
+                               placeholder="<?php echo esc_attr($placeholder); ?>"
+                               <?php echo ($type === 'password' && $current_val !== '') ? 'autocomplete="new-password" ' : ''; ?>>
                         <?php endif; ?>
 
                         <?php if ($description !== ''): ?>
@@ -382,7 +430,8 @@ function lem_render_add_provider_panel(string $service): void {
             <li><code>get_id()</code> · <code>get_name()</code> · <code>is_configured()</code></li>
             <li><code>create_checkout_session(array $args)</code> — returns <code>['checkout_url', 'session_id']</code> or <code>WP_Error</code></li>
             <li><code>verify_webhook()</code> — reads <code>php://input</code>; returns normalised event or <code>WP_Error</code></li>
-            <li><code>get_payment_status(string $session_id)</code> — returns <code>['paid', 'email', 'event_id']</code> or <code>WP_Error</code></li>
+            <li><code>finalize_checkout($reference_id, $context)</code> — return-path finalize (e.g. capture); or <code>WP_Error( 'not_applicable' )</code></li>
+            <li><code>get_payment_status($reference_id)</code> — API poll; returns <code>paid</code>, <code>email</code>, <code>event_id</code>, <code>payment_id</code> (required when paid)</li>
             <li><code>get_settings_fields()</code> · <code>validate_settings(array $settings)</code></li>
         </ul>
         <p class="description">Hook: <code>lem_stripe_session_args</code> — filter checkout args before session creation.</p>
@@ -614,6 +663,14 @@ function lem_render_add_provider_panel(string $service): void {
         </div>
 
     <?php endif; ?>
+
+    <?php
+    // Adaptor- and gating-plugin sections registered via LEM_Settings_Registry,
+    // grouped by tab matching the active service.
+    if (class_exists('LEM_Settings_Registry')) {
+        LEM_Settings_Registry::render_tab($active_service);
+    }
+    ?>
     </div><!-- .lem-service-panel -->
 
 </div><!-- .wrap -->

@@ -149,28 +149,34 @@ $html_content = convert_markdown_to_html($markdown_content);
                     ?>
                 </div>
                 <div class="lem-status-item">
-                    <span class="lem-status-label">Mux API:</span>
-                    <?php 
-                    if ($plugin_instance) {
-                        $credentials = $plugin_instance->get_mux_api_credentials();
-                        if ($credentials && isset($credentials['token_id'])) {
-                            echo '<span class="lem-status-value lem-status-success">✅ Configured</span>';
-                        } else {
-                            echo '<span class="lem-status-value lem-status-warning">⚠️ Not Configured</span>';
-                        }
+                    <span class="lem-status-label">Streaming provider:</span>
+                    <?php
+                    $streaming_provider = null;
+                    if (class_exists('LEM_Streaming_Provider_Factory') && $plugin_instance) {
+                        $streaming_provider = LEM_Streaming_Provider_Factory::get_instance()->get_active_provider($plugin_instance);
+                    }
+                    if (!$streaming_provider) {
+                        echo '<span class="lem-status-value lem-status-error">❌ No adaptor installed</span>';
+                    } elseif ($streaming_provider->is_configured()) {
+                        echo '<span class="lem-status-value lem-status-success">✅ ' . esc_html($streaming_provider->get_name()) . ' configured</span>';
                     } else {
-                        echo '<span class="lem-status-value lem-status-error">❌ Plugin Error</span>';
+                        echo '<span class="lem-status-value lem-status-warning">⚠️ ' . esc_html($streaming_provider->get_name()) . ' not configured</span>';
                     }
                     ?>
                 </div>
                 <div class="lem-status-item">
-                    <span class="lem-status-label">Stripe:</span>
-                    <?php 
-                    $settings = get_option('lem_settings', array());
-                    if (!empty($settings['stripe_publishable_key'])) {
-                        echo '<span class="lem-status-value lem-status-success">✅ Configured</span>';
+                    <span class="lem-status-label">Payment provider:</span>
+                    <?php
+                    $payment_provider = null;
+                    if (class_exists('LEM_Payment_Provider_Factory')) {
+                        $payment_provider = LEM_Payment_Provider_Factory::get_instance()->get_active_provider();
+                    }
+                    if (!$payment_provider) {
+                        echo '<span class="lem-status-value lem-status-error">❌ No adaptor installed</span>';
+                    } elseif ($payment_provider->is_configured()) {
+                        echo '<span class="lem-status-value lem-status-success">✅ ' . esc_html($payment_provider->get_name()) . ' configured</span>';
                     } else {
-                        echo '<span class="lem-status-value lem-status-warning">⚠️ Not Configured</span>';
+                        echo '<span class="lem-status-value lem-status-warning">⚠️ ' . esc_html($payment_provider->get_name()) . ' not configured</span>';
                     }
                     ?>
                 </div>

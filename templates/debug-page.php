@@ -138,6 +138,36 @@ $services_pay_url    = admin_url('edit.php?post_type=lem_event&page=live-event-m
             </div>
         </div>
 
+        <!-- ── Webhook Activity Log ───────────────────────────────────────── -->
+        <div class="lem-section">
+            <h2>Recent Webhook Activity</h2>
+            <div class="lem-card">
+                <p style="margin-top:0;">Live record of every inbound payment webhook. Use this to verify Stripe / PayPal are reaching the endpoint, and to see why a webhook didn't issue a JWT.</p>
+
+                <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+                    <button id="lem-refresh-webhook-log" class="button">Refresh</button>
+                    <label style="margin-left:8px;font-size:13px;"><input type="checkbox" id="lem-webhook-log-auto" checked> Auto-refresh (5s)</label>
+                    <button id="lem-clear-webhook-log" class="button" style="margin-left:auto;color:#a00;">Clear log</button>
+                </div>
+
+                <div id="lem-webhook-log-wrap">
+                    <p id="lem-webhook-log-empty">Loading…</p>
+                    <table id="lem-webhook-log-table" class="wp-list-table widefat fixed striped" style="display:none;">
+                        <thead>
+                            <tr>
+                                <th style="width:140px;">Time</th>
+                                <th style="width:80px;">Provider</th>
+                                <th style="width:120px;">Status</th>
+                                <th style="width:160px;">Event Type</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lem-webhook-log-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- ── Upstash Cache Test ─────────────────────────────────────────── -->
         <div class="lem-section">
             <h2>Upstash Cache Test</h2>
@@ -335,5 +365,97 @@ jQuery(document).ready(function($) {
             $btn.prop('disabled', false).text('Clear All Tokens & Sessions');
         });
     });
+
+    // ── Webhook activity log ──────────────────────────────────────────────
+    var webhookLogTimer = null;
+
+    var statusColors = {
+        received:            '#3498db',
+        processed:           '#27ae60',
+        duplicate:           '#8e44ad',
+        already_has_access:  '#8e44ad',
+        skipped:             '#888',
+        verification_failed: '#c0392b',
+        missing_metadata:    '#e67e22',
+        jwt_failed:          '#c0392b',
+        failed:              '#c0392b'
+    };
+
+    function statusBadge(status) {
+        var color = statusColors[status] || '#666';
+        return '<span style="background:' + color + ';color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">' + escHtml(status.replace(/_/g, ' ')) + '</span>';
+    }
+
+    function renderWebhookLog(rows) {
+        var $empty = $('#lem-webhook-log-empty');
+        var $table = $('#lem-webhook-log-table');
+        var $tbody = $('#lem-webhook-log-tbody');
+
+        if (!rows || rows.length === 0) {
+            $empty.text('No webhook activity recorded yet. Trigger a test webhook from your provider dashboard or via Stripe CLI to populate this log.').show();
+            $table.hide();
+            return;
+        }
+
+        var html = '';
+        rows.forEach(function(r) {
+            var details = '';
+            if (r.message)    details += escHtml(r.message);
+            if (r.payment_id) details += '<br><small style="color:#666;">payment_id: <code>' + escHtml(r.payment_id) + '</code></small>';
+            if (r.event_id)   details += ' &nbsp;<small style="color:#666;">event_id: <code>' + escHtml(r.event_id) + '</code></small>';
+            if (r.email)      details += ' &nbsp;<small style="color:#666;">email: ' + escHtml(r.email) + '</small>';
+            if (r.source_ip)  details += '<br><small style="color:#999;">from ' + escHtml(r.source_ip) + (parseInt(r.has_signature) ? ' • signed' : ' • unsigned') + '</small>';
+
+            html += '<tr>';
+            html += '<td><small>' + escHtml(r.received_at) + '</small></td>';
+            html += '<td>' + escHtml(r.provider || '—') + '</td>';
+            html += '<td>' + statusBadge(r.status) + '</td>';
+            html += '<td><code style="font-size:11px;">' + escHtml(r.event_type || '—') + '</code></td>';
+            html += '<td>' + details + '</td>';
+            html += '</tr>';
+        });
+        $tbody.html(html);
+        $empty.hide();
+        $table.show();
+    }
+
+    function loadWebhookLog() {
+        $.post(lem_ajax.ajax_url, {
+            action: 'lem_get_webhook_log',
+            nonce:  lem_ajax.nonce
+        }, function(r) {
+            if (r.success) renderWebhookLog(r.data.rows);
+        });
+    }
+
+    function startWebhookAutoRefresh() {
+        stopWebhookAutoRefresh();
+        webhookLogTimer = setInterval(loadWebhookLog, 5000);
+    }
+    function stopWebhookAutoRefresh() {
+        if (webhookLogTimer) { clearInterval(webhookLogTimer); webhookLogTimer = null; }
+    }
+
+    $('#lem-refresh-webhook-log').on('click', loadWebhookLog);
+
+    $('#lem-webhook-log-auto').on('change', function() {
+        if (this.checked) startWebhookAutoRefresh();
+        else stopWebhookAutoRefresh();
+    });
+
+    $('#lem-clear-webhook-log').on('click', function() {
+        if (!confirm('Clear all recorded webhook activity?')) return;
+        $.post(lem_ajax.ajax_url, {
+            action: 'lem_clear_webhook_log',
+            nonce:  lem_ajax.nonce
+        }, function(r) {
+            if (r.success) loadWebhookLog();
+        });
+    });
+
+    if ($('#lem-webhook-log-wrap').length) {
+        loadWebhookLog();
+        if ($('#lem-webhook-log-auto').is(':checked')) startWebhookAutoRefresh();
+    }
 });
 </script>

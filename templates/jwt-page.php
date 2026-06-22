@@ -249,53 +249,69 @@ jQuery(document).ready(function($) {
         lemJwtCache = tokens;
 
         if (tokens.length === 0) {
-            $('#lem-jwt-list').html('<p>No active JWT tokens found.</p>');
+            $('#lem-jwt-list').html('<p>No tokens found (active or recently revoked).</p>');
             return;
         }
-        
-        var html = '<table class="wp-list-table widefat fixed striped">';
-        html += '<thead><tr><th>JWT ID (JTI)</th><th>Email</th><th>Event ID</th><th>Redis Session</th><th>Redis Cache</th><th>IP Address</th><th>Created</th><th>Expires</th><th>JWT Token</th><th>Actions</th></tr></thead><tbody>';
+
+        var activeCount  = tokens.filter(function(t) { return t.token_status === 'active'; }).length;
+        var revokedCount = tokens.filter(function(t) { return t.token_status === 'revoked'; }).length;
+        var summary = '<p style="margin-bottom:10px;">'
+            + '<strong>' + activeCount + '</strong> active'
+            + (revokedCount > 0 ? ', <strong>' + revokedCount + '</strong> <span style="color:#c00;">revoked (last 48 h)</span>' : '')
+            + '. Revoked rows appear when a webhook failed mid-flight — use the access code (first 8 chars of JTI) to resend the magic link.</p>';
+
+        var html = summary + '<table class="wp-list-table widefat fixed striped">';
+        html += '<thead><tr><th>Status</th><th>JWT ID (JTI)</th><th>Access Code</th><th>Email</th><th>Event</th><th>Ticket</th><th>Payment ID</th><th>Redis Session</th><th>Redis Cache</th><th>Created</th><th>Expires</th><th>Actions</th></tr></thead><tbody>';
         
         tokens.forEach(function(token, index) {
-            var created = new Date(token.created_at).toLocaleString();
-            var expires = new Date(token.expires_at).toLocaleString();
-            var isExpired = new Date() > new Date(token.expires_at);
+            var created   = new Date(token.created_at).toLocaleString();
+            var expires   = new Date(token.expires_at).toLocaleString();
+            var status    = token.token_status || (new Date() > new Date(token.expires_at) ? 'expired' : 'active');
+            var isActive  = status === 'active';
+            var isRevoked = status === 'revoked';
+            var isExpired = status === 'expired';
+
+            var statusBadge = isRevoked
+                ? '<span style="background:#c00;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px;">REVOKED</span>'
+                : (isExpired
+                    ? '<span style="background:#888;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px;">EXPIRED</span>'
+                    : '<span style="background:#0a0;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px;">ACTIVE</span>');
+
+            var accessCode = token.jti ? token.jti.substr(0, 8).toUpperCase() : '—';
 
             var redisAvailable = token.redis && token.redis.available;
-            var redisSession = '<span style="color:#999;">Unavailable</span>';
-            var redisDetails = '<span style="color:#999;">Unavailable</span>';
+            var redisSession   = '<span style="color:#999;">Unavailable</span>';
+            var redisDetails   = '<span style="color:#999;">Unavailable</span>';
 
             if (redisAvailable) {
-                if (token.redis.session_id) {
-                    redisSession = '<code>' + escHtml(token.redis.session_id) + '</code>';
-                } else {
-                    redisSession = '<span style="color:#999;">None</span>';
-                }
-
+                redisSession = token.redis.session_id
+                    ? '<code>' + escHtml(token.redis.session_id) + '</code>'
+                    : '<span style="color:#999;">None</span>';
                 redisDetails = '<button class="button button-small lem-view-redis" data-index="' + index + '">Inspect</button>';
             }
 
-            html += '<tr>';
-            html += '<td><code>' + escHtml(token.jti) + '</code></td>';
+            var rowStyle = isRevoked ? 'background:#fff5f5;' : (isExpired ? 'background:#fafafa;opacity:.7;' : '');
+
+            html += '<tr style="' + rowStyle + '">';
+            html += '<td>' + statusBadge + '</td>';
+            html += '<td><code style="font-size:11px;">' + escHtml(token.jti) + '</code></td>';
+            html += '<td><code>' + escHtml(accessCode) + '</code></td>';
             html += '<td>' + escHtml(token.email) + '</td>';
             html += '<td>' + escHtml(token.event_id) + '</td>';
+            var ticketType = (token.payment_id && String(token.payment_id).length > 0) ? 'Paid' : 'Free';
+            html += '<td>' + escHtml(ticketType) + '</td>';
+            html += '<td>' + (token.payment_id ? '<code style="font-size:11px;">' + escHtml(token.payment_id) + '</code>' : '<span style="color:#999;">—</span>') + '</td>';
             html += '<td>' + redisSession + '</td>';
             html += '<td>' + redisDetails + '</td>';
-            html += '<td>' + escHtml(token.ip_address) + '</td>';
             html += '<td>' + escHtml(created) + '</td>';
-            html += '<td>' + escHtml(expires) + (isExpired ? ' <span style="color: red;">(Expired)</span>' : '') + '</td>';
+            html += '<td>' + escHtml(expires) + '</td>';
             html += '<td>';
-            if (token.jwt_token) {
-                html += '<button class="button button-small lem-view-jwt" data-jwt="' + escHtml(token.jwt_token) + '">View JWT</button>';
-            } else {
-                html += '<span style="color: #999;">Not stored</span>';
-            }
-            html += '</td>';
-            html += '<td>';
-            if (!isExpired) {
+            if (isActive) {
                 html += '<button class="button button-small lem-revoke-jwt" data-jti="' + escHtml(token.jti) + '">Revoke</button>';
+            } else if (isRevoked) {
+                html += '<span style="color:#999;font-size:11px;">Revoked' + (token.revoked_at ? ' ' + new Date(token.revoked_at).toLocaleString() : '') + '</span>';
             } else {
-                html += '<span style="color: #999;">Expired</span>';
+                html += '<span style="color:#999;">Expired</span>';
             }
             html += '</td>';
             html += '</tr>';

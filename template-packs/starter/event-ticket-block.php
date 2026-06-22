@@ -72,10 +72,11 @@ window.lemSessionId = <?php echo wp_json_encode($session_id); ?>;
         ></mux-player>
 
         <!-- Resend link form -->
-        <form method="post" style="margin-top:1.5rem;">
+        <form method="post" class="lem-resend-form" data-event-id="<?php echo esc_attr($event_id); ?>" style="margin-top:1.5rem;">
             <?php wp_nonce_field('lem_request_new_link', 'lem_new_link_nonce'); ?>
             <input type="hidden" name="lem_event_id" value="<?php echo esc_attr($event_id); ?>">
-            <input type="email" name="email" placeholder="your@email.com" required style="width:100%;padding:.5rem;margin-bottom:.5rem;">
+            <div class="lem-resend-message" style="display:none;margin-bottom:.5rem;"></div>
+            <input type="email" name="email" class="lem-resend-email" placeholder="your@email.com" required style="width:100%;padding:.5rem;margin-bottom:.5rem;">
             <button type="submit" name="lem_request_new_link">Send me a fresh link</button>
         </form>
 
@@ -124,10 +125,11 @@ window.lemSessionId = <?php echo wp_json_encode($session_id); ?>;
         <!-- Resend panel (hidden by default) -->
         <div class="lem-tab-panel lem-tab-panel--hidden" id="lem-panel-resend-<?php echo esc_attr($event_id); ?>" role="tabpanel">
             <p>Enter the email you used when purchasing and we'll resend your magic link.</p>
-            <form method="post" class="lem-resend-form">
+            <form method="post" class="lem-resend-form" data-event-id="<?php echo esc_attr($event_id); ?>">
                 <?php wp_nonce_field('lem_request_new_link', 'lem_new_link_nonce'); ?>
                 <input type="hidden" name="lem_event_id" value="<?php echo esc_attr($event_id); ?>">
-                <input type="email" name="email" placeholder="your@email.com" required
+                <div class="lem-resend-message" style="display:none;margin-bottom:.75rem;"></div>
+                <input type="email" name="email" class="lem-resend-email" placeholder="your@email.com" required
                        style="width:100%;padding:.6rem;margin-bottom:.75rem;">
                 <button type="submit" name="lem_request_new_link"
                         class="lem-ticket-button"

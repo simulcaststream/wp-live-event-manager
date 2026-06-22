@@ -64,10 +64,11 @@ window.lemSessionId = <?php echo wp_json_encode($session_id); ?>;
 
         <div class="obs-block-resend">
             <p class="obs-resend-label">Need a fresh link?</p>
-            <form method="post" class="obs-resend-form-inline">
+            <form method="post" class="lem-resend-form obs-resend-form-inline" data-event-id="<?php echo esc_attr($event_id); ?>">
                 <?php wp_nonce_field('lem_request_new_link', 'lem_new_link_nonce'); ?>
                 <input type="hidden" name="lem_event_id" value="<?php echo esc_attr($event_id); ?>">
-                <input type="email" name="email" class="obs-input" placeholder="your@email.com" required autocomplete="email">
+                <div class="lem-resend-message obs-notice" style="display:none;margin-bottom:.5rem;"></div>
+                <input type="email" name="email" class="obs-input lem-resend-email" placeholder="your@email.com" required autocomplete="email">
                 <button type="submit" name="lem_request_new_link" class="obs-btn obs-btn--ghost">
                     Resend link
                 </button>
@@ -177,14 +178,15 @@ window.lemSessionId = <?php echo wp_json_encode($session_id); ?>;
                 <div class="obs-notice obs-notice--error"><?php echo esc_html($error_message); ?></div>
             <?php endif; ?>
 
-            <form method="post" class="lem-resend-form">
+            <form method="post" class="lem-resend-form" data-event-id="<?php echo esc_attr($event_id); ?>">
                 <?php wp_nonce_field('lem_request_new_link', 'lem_new_link_nonce'); ?>
                 <input type="hidden" name="lem_event_id" value="<?php echo esc_attr($event_id); ?>">
+                <div class="lem-resend-message obs-notice" style="display:none;margin-bottom:.75rem;"></div>
                 <div class="obs-input-wrap">
                     <svg class="obs-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>
                     </svg>
-                    <input type="email" name="email" class="obs-input obs-input--icon lem-email-input"
+                    <input type="email" name="email" class="obs-input obs-input--icon lem-email-input lem-resend-email"
                            placeholder="your@email.com" autocomplete="email" required>
                 </div>
                 <button type="submit" name="lem_request_new_link"

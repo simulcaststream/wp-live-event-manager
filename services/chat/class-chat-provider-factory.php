@@ -2,13 +2,9 @@
 /**
  * Chat Provider Factory
  *
- * Mirrors the pattern of LEM_Streaming_Provider_Factory and LEM_Payment_Provider_Factory.
- * No built-in provider is registered — the chat slot is empty until a companion plugin
- * calls register_provider(). get_active_provider() returns null when nothing is registered.
- *
  * Companion plugins register on plugins_loaded (priority 20 or later):
  *
- *   LEM_Chat_Provider_Factory::get_instance()->register_provider('ably', 'My_Ably_Provider');
+ *   LEM_Chat_Provider_Factory::get_instance()->register_provider('ably', 'LEM_Ably_Chat_Provider');
  *
  * The active provider is controlled by lem_settings['chat_provider'] (default: first registered).
  */
@@ -23,7 +19,7 @@ class LEM_Chat_Provider_Factory {
     private static ?self $instance  = null;
 
     private function __construct() {
-        // No built-in chat provider — companion plugins register their own.
+        // No built-in chat provider — adaptors register via register_provider().
     }
 
     public static function get_instance(): self {
@@ -34,7 +30,8 @@ class LEM_Chat_Provider_Factory {
     }
 
     public function register_provider(string $id, string $class_name): void {
-        self::$providers[$id] = $class_name;
+        self::$providers[ $id ] = $class_name;
+        do_action('lem_chat_provider_registered', $id, $class_name);
     }
 
     public function get_available_providers(): array {
@@ -42,9 +39,19 @@ class LEM_Chat_Provider_Factory {
     }
 
     /**
-     * Return an instantiated provider by ID, or the configured/first provider if null.
-     * Returns null when no providers are registered.
-     *
+     * Resolve the file containing a provider class. Adaptors hook
+     * 'lem_chat_provider_class_file' and return an absolute path.
+     */
+    private function resolve_provider_file(string $provider_id): ?string {
+        $external = apply_filters('lem_chat_provider_class_file', null, $provider_id);
+        if (is_string($external) && $external !== '' && file_exists($external)) {
+            return $external;
+        }
+        $bundled = plugin_dir_path(__FILE__) . 'providers/class-' . strtolower($provider_id) . '-provider.php';
+        return file_exists($bundled) ? $bundled : null;
+    }
+
+    /**
      * @param  string|null $provider_id
      * @return LEM_Chat_Provider_Interface|null
      */
@@ -55,21 +62,23 @@ class LEM_Chat_Provider_Factory {
 
         if ($provider_id === null) {
             $settings    = get_option('lem_settings', array());
-            $provider_id = $settings['chat_provider'] ?? array_key_first(self::$providers);
+            $provider_id = $settings['chat_provider'] ?? '';
         }
 
-        if (!isset(self::$providers[$provider_id])) {
+        if ($provider_id === '' || ! isset(self::$providers[ $provider_id ])) {
             $provider_id = array_key_first(self::$providers);
         }
 
-        $class_name    = self::$providers[$provider_id];
-        $provider_file = plugin_dir_path(__FILE__) . 'providers/class-' . strtolower($provider_id) . '-provider.php';
+        $class_name = self::$providers[ $provider_id ];
 
-        if (file_exists($provider_file) && !class_exists($class_name)) {
-            require_once $provider_file;
+        if (! class_exists($class_name)) {
+            $file = $this->resolve_provider_file($provider_id);
+            if ($file) {
+                require_once $file;
+            }
         }
 
-        if (!class_exists($class_name)) {
+        if (! class_exists($class_name)) {
             error_log("LEM: Chat provider class {$class_name} not found.");
             return null;
         }
@@ -81,9 +90,6 @@ class LEM_Chat_Provider_Factory {
         return $this->get_provider();
     }
 
-    /**
-     * Whether any chat provider is registered and configured.
-     */
     public function is_available(): bool {
         $provider = $this->get_active_provider();
         return $provider !== null && $provider->is_configured();

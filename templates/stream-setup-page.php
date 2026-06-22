@@ -22,13 +22,15 @@ if ($current_event_id) {
 // Use event-specific or global stream ID, or allow user selection
 $live_stream_id = isset($_GET['stream_id']) ? sanitize_text_field($_GET['stream_id']) : ($event_live_stream_id ?: $global_live_stream_id);
 
-// Get list of available streams
-$available_streams = array();
-$credentials = null;
+// Get list of available streams via the active streaming provider.
+$available_streams   = array();
+$provider_configured = false;
+$streaming_provider  = null;
 
-if ($live_event_manager) {
-    $credentials = $live_event_manager->get_mux_api_credentials();
-    if ($credentials) {
+if ($live_event_manager && class_exists('LEM_Streaming_Provider_Factory')) {
+    $streaming_provider = LEM_Streaming_Provider_Factory::get_instance()->get_active_provider($live_event_manager);
+    if ($streaming_provider && $streaming_provider->is_configured()) {
+        $provider_configured = true;
         $request = new WP_REST_Request('GET', '/lem/v1/live-streams');
         $streams_result = $live_event_manager->list_live_streams($request);
         if (!is_wp_error($streams_result) && isset($streams_result['data'])) {
@@ -109,21 +111,27 @@ if ($live_stream_id && $live_event_manager) {
             
             <?php if (empty($live_stream_id)): ?>
                 <p class="description" style="margin-top: 10px; color: #666;">
-                    Select a stream above to view RTMP credentials and manage Simulcast targets. 
-                    Or create a new stream in your <a href="https://dashboard.mux.com/video/live-streams" target="_blank">Mux Dashboard</a>.
+                    Select a stream above to view RTMP credentials and manage Simulcast targets.
                 </p>
             <?php endif; ?>
         <?php else: ?>
-            <?php if ($credentials): ?>
+            <?php if ($provider_configured): ?>
                 <p class="description">
-                    Unable to fetch streams from Mux. Check your API credentials in 
+                    Unable to fetch streams from
+                    <?php echo esc_html($streaming_provider ? $streaming_provider->get_name() : 'the active provider'); ?>.
+                    Check your API credentials in
+                    <a href="<?php echo admin_url('admin.php?page=live-event-manager-settings'); ?>">Settings</a>.
+                </p>
+            <?php elseif ($streaming_provider): ?>
+                <p class="description">
+                    <strong><?php echo esc_html($streaming_provider->get_name()); ?> credentials not configured.</strong>
+                    Set them up in
                     <a href="<?php echo admin_url('admin.php?page=live-event-manager-settings'); ?>">Settings</a>.
                 </p>
             <?php else: ?>
                 <p class="description">
-                    <strong>Mux API credentials not configured.</strong> 
-                    Please set up your Mux API credentials in 
-                    <a href="<?php echo admin_url('admin.php?page=live-event-manager-settings'); ?>">Settings</a>.
+                    <strong>No streaming provider is registered.</strong>
+                    Install the LEM Free Adaptors or LEM Premium plugin to enable streaming.
                 </p>
             <?php endif; ?>
             

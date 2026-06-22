@@ -2,10 +2,10 @@
 /**
  * Payment Provider Interface
  *
- * All payment providers must implement this interface. The contract is intentionally
- * minimal: create a checkout session, verify an incoming webhook, and fetch a payment
- * status. Everything else (refunds, subscriptions, …) lives in provider-specific code
- * or future extensions to this interface.
+ * All payment providers must implement this interface. Core uses these methods for:
+ *   - Checkout creation
+ *   - Webhook verification (verify_webhook)
+ *   - API reconciliation when webhooks are delayed (finalize_checkout + get_payment_status)
  *
  * Extension point for companion plugins:
  *   LEM_Payment_Provider_Factory::register_provider('myprovider', 'My_LEM_Provider');
@@ -45,7 +45,7 @@ interface LEM_Payment_Provider_Interface {
      *
      * Returns an array on success:
      *   checkout_url  — URL to redirect the buyer to
-     *   session_id    — provider-side session identifier (stored for dedup)
+     *   session_id    — provider reference id (store for reconciliation; Stripe cs_…, PayPal order id)
      *
      * Returns WP_Error on failure.
      *
@@ -61,8 +61,8 @@ interface LEM_Payment_Provider_Interface {
      * Returns a normalised event object on success or WP_Error on failure.
      *
      * Normalised event shape:
-     *   type          — string  provider-specific event type, e.g. 'checkout.completed'
-     *   payment_id    — string  provider-side session / payment identifier
+     *   type          — string  use 'checkout.completed' when access should be granted
+     *   payment_id    — string  id stored on JWT rows (session id, capture id, etc.)
      *   event_id      — string  LEM event ID from metadata
      *   email         — string  buyer email
      *   raw           — mixed   full provider event object for advanced hooks
@@ -72,19 +72,40 @@ interface LEM_Payment_Provider_Interface {
     public function verify_webhook();
 
     /**
-     * Retrieve the status of a payment session.
+     * Finalize checkout after the buyer returns (provider-specific).
      *
-     * Returns an array:
-     *   paid          — bool
-     *   email         — string|null
-     *   event_id      — string|null
+     * Examples: PayPal captures an approved order; Stripe has nothing to do here.
+     * Core calls this before get_payment_status() during API reconciliation.
+     *
+     * Return WP_Error with code `not_applicable` when this provider only needs get_payment_status().
+     *
+     * On success, return the same normalized shape as get_payment_status() (see below).
+     *
+     * @param string               $reference_id Checkout reference from create_checkout_session() session_id.
+     * @param array<string, mixed> $context      Optional hints, e.g. ['event_id' => '123'].
+     * @return array|WP_Error
+     */
+    public function finalize_checkout(string $reference_id, array $context = array());
+
+    /**
+     * Retrieve payment status from the provider API (webhook fallback / reconciliation).
+     *
+     * $reference_id is the value returned as session_id from create_checkout_session()
+     * (Stripe Checkout session id, PayPal order id, etc.).
+     *
+     * Required normalized return shape:
+     *   paid         — bool    true only when funds are captured and access may be granted
+     *   email        — string  buyer email (required when paid is true)
+     *   event_id     — string  LEM event post id from metadata (required when paid is true)
+     *   payment_id   — string  id stored on JWT rows; defaults to $reference_id if omitted
+     *   order_id     — string  optional parent order id (PayPal); omit if not applicable
      *
      * Returns WP_Error on failure.
      *
-     * @param  string $session_id
+     * @param  string $reference_id
      * @return array|WP_Error
      */
-    public function get_payment_status(string $session_id);
+    public function get_payment_status(string $reference_id);
 
     /**
      * Return admin settings fields this provider needs.
@@ -99,7 +120,7 @@ interface LEM_Payment_Provider_Interface {
      * Validate and sanitize submitted settings values for this provider.
      *
      * @param  array $settings Raw POST values.
-     * @return array           Sanitized values.
+     * @return array           Sanitized values or indexed list of error strings.
      */
     public function validate_settings(array $settings): array;
 }

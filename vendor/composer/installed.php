@@ -3,7 +3,7 @@
         'name' => 'live-event-manager/wordpress-plugin',
         'pretty_version' => 'dev-main',
         'version' => 'dev-main',
-        'reference' => '59df0487fdc7b146aeba665069af19a7b6d7a0ec',
+        'reference' => '97491f55ccef9ed57afb83b24b537d403dddd20e',
         'type' => 'wordpress-plugin',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -22,7 +22,7 @@
         'live-event-manager/wordpress-plugin' => array(
             'pretty_version' => 'dev-main',
             'version' => 'dev-main',
-            'reference' => '59df0487fdc7b146aeba665069af19a7b6d7a0ec',
+            'reference' => '97491f55ccef9ed57afb83b24b537d403dddd20e',
             'type' => 'wordpress-plugin',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
